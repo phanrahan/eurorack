@@ -1,0 +1,2101 @@
+   1               		.file	"ADSR_0_1.c"
+   2               	__SP_H__ = 0x3e
+   3               	__SP_L__ = 0x3d
+   4               	__SREG__ = 0x3f
+   5               	__tmp_reg__ = 0
+   6               	__zero_reg__ = 1
+   7               		.text
+   8               	.Ltext0:
+   9               		.cfi_sections	.debug_frame
+  10               	.global	init_ports
+  12               	init_ports:
+  13               	.LFB6:
+  14               		.file 1 "ADSR_0_1.c"
+   1:ADSR_0_1.c    **** /*
+   2:ADSR_0_1.c    **** * ADSR_0_1.c
+   3:ADSR_0_1.c    **** *
+   4:ADSR_0_1.c    **** * Created: 6/28/2016 1:45:45 PM
+   5:ADSR_0_1.c    **** *  Author: TimR
+   6:ADSR_0_1.c    **** */
+   7:ADSR_0_1.c    **** 
+   8:ADSR_0_1.c    **** #include "stdio.h"
+   9:ADSR_0_1.c    **** #include "stdlib.h"
+  10:ADSR_0_1.c    **** #include "string.h"
+  11:ADSR_0_1.c    **** #include "avr/io.h"
+  12:ADSR_0_1.c    **** #include "avr/interrupt.h"
+  13:ADSR_0_1.c    **** 
+  14:ADSR_0_1.c    **** // Prototypes
+  15:ADSR_0_1.c    **** void process_adsr(void);
+  16:ADSR_0_1.c    **** void	init_ports(void);
+  17:ADSR_0_1.c    **** void	init_devices(void);
+  18:ADSR_0_1.c    **** void	pgm_init(void);
+  19:ADSR_0_1.c    **** void	timer_init(void);
+  20:ADSR_0_1.c    **** void SendToShiftyTypes(void);
+  21:ADSR_0_1.c    **** 
+  22:ADSR_0_1.c    **** 
+  23:ADSR_0_1.c    **** // Hardware Defines
+  24:ADSR_0_1.c    **** #define LEDS_ATTACK		0x01
+  25:ADSR_0_1.c    **** #define LEDS_DECAY		0x04
+  26:ADSR_0_1.c    **** #define LEDS_SUSTAIN	0x02
+  27:ADSR_0_1.c    **** #define LEDS_RELEASE	0x08
+  28:ADSR_0_1.c    **** #define LEDS_IDLE_MASK	0xF0
+  29:ADSR_0_1.c    **** 
+  30:ADSR_0_1.c    **** #define SW_AR		PIND&0x80		// 0=AR, 1=ADSR
+  31:ADSR_0_1.c    **** #define SW_LIN		PIND&0x40		// 0=lin, 1=expo
+  32:ADSR_0_1.c    **** 
+  33:ADSR_0_1.c    **** #define	EOC_HI		PORTB|=0x02;
+  34:ADSR_0_1.c    **** #define	EOC_LO		PORTB&=~0x02;
+  35:ADSR_0_1.c    **** 
+  36:ADSR_0_1.c    **** // Shifty Types
+  37:ADSR_0_1.c    **** #define	SS_LO		PORTB&=~0x04;
+  38:ADSR_0_1.c    **** #define	SS_HI		PORTB|=0x04;
+  39:ADSR_0_1.c    **** 
+  40:ADSR_0_1.c    **** // LED macros
+  41:ADSR_0_1.c    **** #define LED_ATTACK	{PORTD|=~LEDS_IDLE_MASK;PORTD&=~LEDS_ATTACK;}
+  42:ADSR_0_1.c    **** #define LED_DECAY	{PORTD|=~LEDS_IDLE_MASK;PORTD&=~LEDS_DECAY;}
+  43:ADSR_0_1.c    **** #define LED_SUSTAIN	{PORTD|=~LEDS_IDLE_MASK;PORTD&=~LEDS_SUSTAIN;}
+  44:ADSR_0_1.c    **** #define LED_RELEASE	{PORTD|=~LEDS_IDLE_MASK;PORTD&=~LEDS_RELEASE;}
+  45:ADSR_0_1.c    **** #define LED_IDLE	{PORTD|=~LEDS_IDLE_MASK;}
+  46:ADSR_0_1.c    **** 
+  47:ADSR_0_1.c    **** //#define	EXPOEPSILON		0x01FFFFFF
+  48:ADSR_0_1.c    **** #define	EXPOEPSILON		0x0000FFFF
+  49:ADSR_0_1.c    **** #define ADCCHANNELMAX	6
+  50:ADSR_0_1.c    **** #define	EOC_TIMEOUT		9			// about ?mS
+  51:ADSR_0_1.c    **** 
+  52:ADSR_0_1.c    **** // Globals
+  53:ADSR_0_1.c    **** 
+  54:ADSR_0_1.c    **** enum states {
+  55:ADSR_0_1.c    **** 	s_idle,
+  56:ADSR_0_1.c    **** 	s_att,
+  57:ADSR_0_1.c    **** 	s_dec,
+  58:ADSR_0_1.c    **** 	s_sus,
+  59:ADSR_0_1.c    **** 	s_rel
+  60:ADSR_0_1.c    **** };
+  61:ADSR_0_1.c    **** 
+  62:ADSR_0_1.c    **** struct adsr {
+  63:ADSR_0_1.c    **** 	uint32_t	attack;
+  64:ADSR_0_1.c    **** 	uint32_t	decay;
+  65:ADSR_0_1.c    **** 	uint32_t	sustain;
+  66:ADSR_0_1.c    **** 	uint32_t	release;
+  67:ADSR_0_1.c    **** 	uint32_t	accum;
+  68:ADSR_0_1.c    **** 	uint32_t	curDac;
+  69:ADSR_0_1.c    **** 	uint8_t		state;
+  70:ADSR_0_1.c    **** };
+  71:ADSR_0_1.c    **** volatile struct adsr thisADSR;
+  72:ADSR_0_1.c    **** 
+  73:ADSR_0_1.c    **** volatile	uint16_t	rawAdcPots[4];	// raw pot values from ADC
+  74:ADSR_0_1.c    **** volatile	uint16_t	rawAdcSum[4];	// sum of raw pot values and adsr/rel values
+  75:ADSR_0_1.c    **** uint16_t	rel_cv,adsr_cv;				// raw ADC values from rel and adsr jacks
+  76:ADSR_0_1.c    **** uint8_t		flgShape;					//sets lin or expo shape, 
+  77:ADSR_0_1.c    **** uint8_t		flgAR,flgARold;				//sets AR mode -- from FP switch
+  78:ADSR_0_1.c    **** volatile uint8_t	flgGate;			// set when a rising Gate is detected
+  79:ADSR_0_1.c    **** uint8_t		thisAdcChannel;				// current ADC mux setting
+  80:ADSR_0_1.c    **** uint8_t		flgProcess;					// shows its time to process the ADSR
+  81:ADSR_0_1.c    **** volatile uint8_t		flgEOC,tmrEOC;
+  82:ADSR_0_1.c    **** 
+  83:ADSR_0_1.c    **** int main(void)
+  84:ADSR_0_1.c    **** {
+  85:ADSR_0_1.c    **** 	cli();
+  86:ADSR_0_1.c    **** 	init_ports();
+  87:ADSR_0_1.c    **** 	init_devices();
+  88:ADSR_0_1.c    **** 	timer_init();
+  89:ADSR_0_1.c    **** 	pgm_init();
+  90:ADSR_0_1.c    **** 	sei();
+  91:ADSR_0_1.c    **** 	
+  92:ADSR_0_1.c    **** 	ADCSRA |= (1<<ADIE);					// enable ADC interrupts
+  93:ADSR_0_1.c    **** 	ADCSRA |= (1<<ADSC);				//start next conversion
+  94:ADSR_0_1.c    **** 
+  95:ADSR_0_1.c    **** 	while(1)
+  96:ADSR_0_1.c    **** 	{
+  97:ADSR_0_1.c    **** 		// wait for gate flag
+  98:ADSR_0_1.c    **** 		if(flgGate)
+  99:ADSR_0_1.c    **** 		{
+ 100:ADSR_0_1.c    **** 			flgGate=0;			// clear flag
+ 101:ADSR_0_1.c    **** 			LED_ATTACK
+ 102:ADSR_0_1.c    **** 			thisADSR.state = s_att;
+ 103:ADSR_0_1.c    **** 		}
+ 104:ADSR_0_1.c    **** 		// wait for processing flag
+ 105:ADSR_0_1.c    **** 		// decouples from the irq so the processing does not happen
+ 106:ADSR_0_1.c    **** 		// inside an irq.
+ 107:ADSR_0_1.c    **** 		if(flgProcess)
+ 108:ADSR_0_1.c    **** 		{
+ 109:ADSR_0_1.c    **** 			flgProcess=0;			// clear flag
+ 110:ADSR_0_1.c    **** 			// set env based on switch
+ 111:ADSR_0_1.c    **** 			if(SW_AR)
+ 112:ADSR_0_1.c    **** 				flgAR=0;		// adsr
+ 113:ADSR_0_1.c    **** 			else
+ 114:ADSR_0_1.c    **** 				flgAR=1;		//ar
+ 115:ADSR_0_1.c    **** 			if(flgARold!=flgAR)
+ 116:ADSR_0_1.c    **** 				thisADSR.state = s_att;
+ 117:ADSR_0_1.c    **** 			flgARold=flgAR;
+ 118:ADSR_0_1.c    **** 			
+ 119:ADSR_0_1.c    **** 			// set shape based on switch
+ 120:ADSR_0_1.c    **** 			if(SW_LIN)
+ 121:ADSR_0_1.c    **** 				flgShape=0;		// expo
+ 122:ADSR_0_1.c    **** 			else
+ 123:ADSR_0_1.c    **** 				flgShape=1;		// lin			
+ 124:ADSR_0_1.c    **** 			process_adsr();
+ 125:ADSR_0_1.c    **** 			SendToShiftyTypes();
+ 126:ADSR_0_1.c    **** 		}
+ 127:ADSR_0_1.c    **** 	}
+ 128:ADSR_0_1.c    **** }
+ 129:ADSR_0_1.c    **** 
+ 130:ADSR_0_1.c    **** 
+ 131:ADSR_0_1.c    **** void	init_ports(void)
+ 132:ADSR_0_1.c    **** {
+  15               		.loc 1 132 0
+  16               		.cfi_startproc
+  17               	/* prologue: function */
+  18               	/* frame size = 0 */
+  19               	/* stack size = 0 */
+  20               	.L__stack_usage = 0
+ 133:ADSR_0_1.c    **** 	DDRB = 0x2E;
+  21               		.loc 1 133 0
+  22 0000 8EE2      		ldi r24,lo8(46)
+  23 0002 84B9      		out 0x4,r24
+ 134:ADSR_0_1.c    **** 	DDRC = 0x00;		// all inputs of the ADC variety
+  24               		.loc 1 134 0
+  25 0004 17B8      		out 0x7,__zero_reg__
+ 135:ADSR_0_1.c    **** 	PORTD = 0xC0;		// pull ups on PD6 & 7
+  26               		.loc 1 135 0
+  27 0006 80EC      		ldi r24,lo8(-64)
+  28 0008 8BB9      		out 0xb,r24
+ 136:ADSR_0_1.c    **** 	DDRD = 0x0F;		//PD0-3 outputs, rest inputs
+  29               		.loc 1 136 0
+  30 000a 8FE0      		ldi r24,lo8(15)
+  31 000c 8AB9      		out 0xa,r24
+  32               	/* epilogue start */
+ 137:ADSR_0_1.c    **** }
+  33               		.loc 1 137 0
+  34 000e 0895      		ret
+  35               		.cfi_endproc
+  36               	.LFE6:
+  38               	.global	process_adsr
+  40               	process_adsr:
+  41               	.LFB7:
+ 138:ADSR_0_1.c    **** 
+ 139:ADSR_0_1.c    **** 
+ 140:ADSR_0_1.c    **** void process_adsr(void)
+ 141:ADSR_0_1.c    **** {
+  42               		.loc 1 141 0
+  43               		.cfi_startproc
+  44 0010 2F92      		push r2
+  45               	.LCFI0:
+  46               		.cfi_def_cfa_offset 3
+  47               		.cfi_offset 2, -2
+  48 0012 3F92      		push r3
+  49               	.LCFI1:
+  50               		.cfi_def_cfa_offset 4
+  51               		.cfi_offset 3, -3
+  52 0014 4F92      		push r4
+  53               	.LCFI2:
+  54               		.cfi_def_cfa_offset 5
+  55               		.cfi_offset 4, -4
+  56 0016 5F92      		push r5
+  57               	.LCFI3:
+  58               		.cfi_def_cfa_offset 6
+  59               		.cfi_offset 5, -5
+  60 0018 6F92      		push r6
+  61               	.LCFI4:
+  62               		.cfi_def_cfa_offset 7
+  63               		.cfi_offset 6, -6
+  64 001a 7F92      		push r7
+  65               	.LCFI5:
+  66               		.cfi_def_cfa_offset 8
+  67               		.cfi_offset 7, -7
+  68 001c 8F92      		push r8
+  69               	.LCFI6:
+  70               		.cfi_def_cfa_offset 9
+  71               		.cfi_offset 8, -8
+  72 001e 9F92      		push r9
+  73               	.LCFI7:
+  74               		.cfi_def_cfa_offset 10
+  75               		.cfi_offset 9, -9
+  76 0020 AF92      		push r10
+  77               	.LCFI8:
+  78               		.cfi_def_cfa_offset 11
+  79               		.cfi_offset 10, -10
+  80 0022 BF92      		push r11
+  81               	.LCFI9:
+  82               		.cfi_def_cfa_offset 12
+  83               		.cfi_offset 11, -11
+  84 0024 CF92      		push r12
+  85               	.LCFI10:
+  86               		.cfi_def_cfa_offset 13
+  87               		.cfi_offset 12, -12
+  88 0026 DF92      		push r13
+  89               	.LCFI11:
+  90               		.cfi_def_cfa_offset 14
+  91               		.cfi_offset 13, -13
+  92 0028 EF92      		push r14
+  93               	.LCFI12:
+  94               		.cfi_def_cfa_offset 15
+  95               		.cfi_offset 14, -14
+  96 002a FF92      		push r15
+  97               	.LCFI13:
+  98               		.cfi_def_cfa_offset 16
+  99               		.cfi_offset 15, -15
+ 100 002c 0F93      		push r16
+ 101               	.LCFI14:
+ 102               		.cfi_def_cfa_offset 17
+ 103               		.cfi_offset 16, -16
+ 104 002e 1F93      		push r17
+ 105               	.LCFI15:
+ 106               		.cfi_def_cfa_offset 18
+ 107               		.cfi_offset 17, -17
+ 108 0030 CF93      		push r28
+ 109               	.LCFI16:
+ 110               		.cfi_def_cfa_offset 19
+ 111               		.cfi_offset 28, -18
+ 112 0032 DF93      		push r29
+ 113               	.LCFI17:
+ 114               		.cfi_def_cfa_offset 20
+ 115               		.cfi_offset 29, -19
+ 116 0034 CDB7      		in r28,__SP_L__
+ 117 0036 DEB7      		in r29,__SP_H__
+ 118               	.LCFI18:
+ 119               		.cfi_def_cfa_register 28
+ 120 0038 6097      		sbiw r28,16
+ 121               	.LCFI19:
+ 122               		.cfi_def_cfa_offset 36
+ 123 003a 0FB6      		in __tmp_reg__,__SREG__
+ 124 003c F894      		cli
+ 125 003e DEBF      		out __SP_H__,r29
+ 126 0040 0FBE      		out __SREG__,__tmp_reg__
+ 127 0042 CDBF      		out __SP_L__,r28
+ 128               	/* prologue: function */
+ 129               	/* frame size = 16 */
+ 130               	/* stack size = 34 */
+ 131               	.L__stack_usage = 34
+ 142:ADSR_0_1.c    **** 	static uint32_t		NextExpoAmt;
+ 143:ADSR_0_1.c    **** 	//	static uint8_t		flgRetrigOld;
+ 144:ADSR_0_1.c    **** 	//	uint16_t			index;
+ 145:ADSR_0_1.c    **** 	cli();
+ 132               		.loc 1 145 0
+ 133               	/* #APP */
+ 134               	 ;  145 "ADSR_0_1.c" 1
+ 135 0044 F894      		cli
+ 136               	 ;  0 "" 2
+ 146:ADSR_0_1.c    **** 	
+ 147:ADSR_0_1.c    **** 	switch (thisADSR.state) {
+ 137               		.loc 1 147 0
+ 138               	/* #NOAPP */
+ 139 0046 8091 0000 		lds r24,thisADSR+24
+ 140 004a 8230      		cpi r24,lo8(2)
+ 141 004c 01F4      		brne .+2
+ 142 004e 00C0      		rjmp .L4
+ 143 0050 00F4      		brsh .L5
+ 144 0052 8130      		cpi r24,lo8(1)
+ 145 0054 01F4      		brne .+2
+ 146 0056 00C0      		rjmp .L6
+ 147               	.L3:
+ 148:ADSR_0_1.c    **** 		case s_idle:
+ 149:ADSR_0_1.c    **** 		break;
+ 150:ADSR_0_1.c    **** 		
+ 151:ADSR_0_1.c    **** 		case s_att:
+ 152:ADSR_0_1.c    **** 		if(flgShape) {
+ 153:ADSR_0_1.c    **** 			//linear processing
+ 154:ADSR_0_1.c    **** 			if((int64_t)(0x7fffffff-(thisADSR.accum)) < (thisADSR.attack)) {
+ 155:ADSR_0_1.c    **** 				thisADSR.accum=0x7fffffff;
+ 156:ADSR_0_1.c    **** 				if(flgAR) {
+ 157:ADSR_0_1.c    **** 					thisADSR.state=s_rel;
+ 158:ADSR_0_1.c    **** 					LED_RELEASE
+ 159:ADSR_0_1.c    **** 				} else {
+ 160:ADSR_0_1.c    **** 					thisADSR.state=s_dec;
+ 161:ADSR_0_1.c    **** 					LED_DECAY
+ 162:ADSR_0_1.c    **** 				}
+ 163:ADSR_0_1.c    **** 			}
+ 164:ADSR_0_1.c    **** 			else
+ 165:ADSR_0_1.c    **** 			thisADSR.accum+=((thisADSR.attack)/2);
+ 166:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 167:ADSR_0_1.c    **** 		}
+ 168:ADSR_0_1.c    **** 		else {
+ 169:ADSR_0_1.c    **** 			//expo processing
+ 170:ADSR_0_1.c    **** 			NextExpoAmt=(0x9fffffff-thisADSR.accum);
+ 171:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[0]*2)+8);
+ 172:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt*3;
+ 173:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/4;
+ 174:ADSR_0_1.c    **** 			
+ 175:ADSR_0_1.c    **** 			if(NextExpoAmt>0x7ffffff0)
+ 176:ADSR_0_1.c    **** 			NextExpoAmt=0x7ffffff0;
+ 177:ADSR_0_1.c    **** 			if(NextExpoAmt<0)
+ 178:ADSR_0_1.c    **** 			NextExpoAmt=0x7ffffff0;
+ 179:ADSR_0_1.c    **** 			if((0x7fffffff-(thisADSR.accum)) <= NextExpoAmt+EXPOEPSILON) {
+ 180:ADSR_0_1.c    **** 				thisADSR.accum=0x7fffffff;
+ 181:ADSR_0_1.c    **** 				if(flgAR) {
+ 182:ADSR_0_1.c    **** 					thisADSR.state=s_rel;
+ 183:ADSR_0_1.c    **** 					LED_RELEASE
+ 184:ADSR_0_1.c    **** 					} else {
+ 185:ADSR_0_1.c    **** 					thisADSR.state=s_dec;
+ 186:ADSR_0_1.c    **** 					LED_DECAY
+ 187:ADSR_0_1.c    **** 				}
+ 188:ADSR_0_1.c    **** 			}
+ 189:ADSR_0_1.c    **** 			else
+ 190:ADSR_0_1.c    **** 			thisADSR.accum+=NextExpoAmt;
+ 191:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 192:ADSR_0_1.c    **** 		}
+ 193:ADSR_0_1.c    **** 		
+ 194:ADSR_0_1.c    **** 		break;
+ 195:ADSR_0_1.c    **** 		
+ 196:ADSR_0_1.c    **** 		case s_dec:
+ 197:ADSR_0_1.c    **** 		if(flgShape) {
+ 198:ADSR_0_1.c    **** 			//linear processing
+ 199:ADSR_0_1.c    **** 			if(((int64_t)thisADSR.accum - (int64_t)(thisADSR.decay)) < thisADSR.sustain/2) {
+ 200:ADSR_0_1.c    **** 				thisADSR.accum=thisADSR.sustain/2;
+ 201:ADSR_0_1.c    **** 				thisADSR.state=s_sus;
+ 202:ADSR_0_1.c    **** 				LED_SUSTAIN
+ 203:ADSR_0_1.c    **** 			}
+ 204:ADSR_0_1.c    **** 			else
+ 205:ADSR_0_1.c    **** 			thisADSR.accum-=(thisADSR.decay/2);
+ 206:ADSR_0_1.c    **** 			
+ 207:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 208:ADSR_0_1.c    **** 			//break;
+ 209:ADSR_0_1.c    **** 			
+ 210:ADSR_0_1.c    **** 			} else {
+ 211:ADSR_0_1.c    **** 			//expo processing
+ 212:ADSR_0_1.c    **** 			NextExpoAmt=(thisADSR.accum-(thisADSR.sustain/2));
+ 213:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[1]*3)+12);
+ 214:ADSR_0_1.c    **** 			NextExpoAmt=((NextExpoAmt*12)/10);
+ 215:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt;
+ 216:ADSR_0_1.c    **** 
+ 217:ADSR_0_1.c    **** 			if((int64_t)thisADSR.accum-((thisADSR.sustain/2)+EXPOEPSILON)<NextExpoAmt) {
+ 218:ADSR_0_1.c    **** 				thisADSR.accum-=NextExpoAmt*2;
+ 219:ADSR_0_1.c    **** 				thisADSR.state=s_sus;
+ 220:ADSR_0_1.c    **** 				LED_SUSTAIN
+ 221:ADSR_0_1.c    **** 			}
+ 222:ADSR_0_1.c    **** 			else
+ 223:ADSR_0_1.c    **** 			thisADSR.accum-=NextExpoAmt*2;
+ 224:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 225:ADSR_0_1.c    **** 		}
+ 226:ADSR_0_1.c    **** 
+ 227:ADSR_0_1.c    **** 		break;
+ 228:ADSR_0_1.c    **** 		
+ 229:ADSR_0_1.c    **** 		case s_sus:
+ 230:ADSR_0_1.c    **** 		thisADSR.accum=thisADSR.sustain/2;
+ 231:ADSR_0_1.c    **** 		thisADSR.curDac=thisADSR.accum*2;
+ 232:ADSR_0_1.c    **** 		//if(PORTA.IN & PIN6_bm)
+ 233:ADSR_0_1.c    **** 		if((PIND & 0x10)==0x10)	{					// is Gate went away i.e. high (inverted)
+ 234:ADSR_0_1.c    **** 			thisADSR.state=s_rel;						// jump to release state
+ 235:ADSR_0_1.c    **** 			LED_RELEASE
+ 236:ADSR_0_1.c    **** 		}
+ 237:ADSR_0_1.c    **** 		break;
+ 238:ADSR_0_1.c    **** 
+ 239:ADSR_0_1.c    **** 		case s_rel:
+ 240:ADSR_0_1.c    **** 		if(flgShape) {
+ 241:ADSR_0_1.c    **** 			//linear processing
+ 242:ADSR_0_1.c    **** 			if(thisADSR.accum <= (thisADSR.release)) {
+ 243:ADSR_0_1.c    **** 				thisADSR.accum=0;
+ 244:ADSR_0_1.c    **** 				thisADSR.state=s_idle;
+ 245:ADSR_0_1.c    **** 				LED_IDLE
+ 246:ADSR_0_1.c    **** 				
+ 247:ADSR_0_1.c    **** 				// use for cycle mode...
+ 248:ADSR_0_1.c    **** 				EOC_HI;
+ 249:ADSR_0_1.c    **** 				tmrEOC=0;
+ 250:ADSR_0_1.c    **** 				flgEOC=1;
+ 251:ADSR_0_1.c    **** 				
+ 252:ADSR_0_1.c    **** 			}
+ 253:ADSR_0_1.c    **** 			else
+ 254:ADSR_0_1.c    **** 			thisADSR.accum-=((thisADSR.release)/2);
+ 255:ADSR_0_1.c    **** 			
+ 256:ADSR_0_1.c    **** 			//process exp curve crap
+ 257:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 258:ADSR_0_1.c    **** 			} else {
+ 259:ADSR_0_1.c    **** 			//process exp curve
+ 260:ADSR_0_1.c    **** 			NextExpoAmt=thisADSR.accum;
+ 261:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[3]*3)+12);
+ 262:ADSR_0_1.c    **** 			NextExpoAmt=((NextExpoAmt*3)/2);
+ 263:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt;
+ 264:ADSR_0_1.c    **** 
+ 265:ADSR_0_1.c    **** 			//if(thisADSR.accum <= EXPOEPSILON) {
+ 266:ADSR_0_1.c    **** 			if((int32_t)thisADSR.accum<(NextExpoAmt+EXPOEPSILON)) {
+ 267:ADSR_0_1.c    **** 				thisADSR.accum=0;
+ 268:ADSR_0_1.c    **** 				thisADSR.state=s_idle;
+ 269:ADSR_0_1.c    **** 				LED_IDLE
+ 270:ADSR_0_1.c    **** 				// use for cycle mode...
+ 271:ADSR_0_1.c    **** 				EOC_HI;
+ 272:ADSR_0_1.c    **** 				tmrEOC=0;
+ 273:ADSR_0_1.c    **** 				flgEOC=1;
+ 274:ADSR_0_1.c    **** 
+ 275:ADSR_0_1.c    **** 			}
+ 276:ADSR_0_1.c    **** 			
+ 277:ADSR_0_1.c    **** 			else
+ 278:ADSR_0_1.c    **** 			thisADSR.accum-=((NextExpoAmt/8)*18);
+ 279:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 280:ADSR_0_1.c    **** 			break;
+ 281:ADSR_0_1.c    **** 		}
+ 282:ADSR_0_1.c    **** 	}
+ 283:ADSR_0_1.c    **** 	sei();
+ 148               		.loc 1 283 0
+ 149               	/* #APP */
+ 150               	 ;  283 "ADSR_0_1.c" 1
+ 151 0058 7894      		sei
+ 152               	 ;  0 "" 2
+ 153               	/* epilogue start */
+ 284:ADSR_0_1.c    **** }
+ 154               		.loc 1 284 0
+ 155               	/* #NOAPP */
+ 156 005a 6096      		adiw r28,16
+ 157 005c 0FB6      		in __tmp_reg__,__SREG__
+ 158 005e F894      		cli
+ 159 0060 DEBF      		out __SP_H__,r29
+ 160 0062 0FBE      		out __SREG__,__tmp_reg__
+ 161 0064 CDBF      		out __SP_L__,r28
+ 162 0066 DF91      		pop r29
+ 163 0068 CF91      		pop r28
+ 164 006a 1F91      		pop r17
+ 165 006c 0F91      		pop r16
+ 166 006e FF90      		pop r15
+ 167 0070 EF90      		pop r14
+ 168 0072 DF90      		pop r13
+ 169 0074 CF90      		pop r12
+ 170 0076 BF90      		pop r11
+ 171 0078 AF90      		pop r10
+ 172 007a 9F90      		pop r9
+ 173 007c 8F90      		pop r8
+ 174 007e 7F90      		pop r7
+ 175 0080 6F90      		pop r6
+ 176 0082 5F90      		pop r5
+ 177 0084 4F90      		pop r4
+ 178 0086 3F90      		pop r3
+ 179 0088 2F90      		pop r2
+ 180 008a 0895      		ret
+ 181               	.L5:
+ 147:ADSR_0_1.c    **** 		case s_idle:
+ 182               		.loc 1 147 0
+ 183 008c 8330      		cpi r24,lo8(3)
+ 184 008e 01F4      		brne .+2
+ 185 0090 00C0      		rjmp .L7
+ 186 0092 8430      		cpi r24,lo8(4)
+ 187 0094 01F4      		brne .L3
+ 240:ADSR_0_1.c    **** 			//linear processing
+ 188               		.loc 1 240 0
+ 189 0096 8091 0000 		lds r24,flgShape
+ 190 009a 8823      		tst r24
+ 191 009c 01F4      		brne .+2
+ 192 009e 00C0      		rjmp .L21
+ 242:ADSR_0_1.c    **** 				thisADSR.accum=0;
+ 193               		.loc 1 242 0
+ 194 00a0 4091 0000 		lds r20,thisADSR+16
+ 195 00a4 5091 0000 		lds r21,thisADSR+16+1
+ 196 00a8 6091 0000 		lds r22,thisADSR+16+2
+ 197 00ac 7091 0000 		lds r23,thisADSR+16+3
+ 198 00b0 8091 0000 		lds r24,thisADSR+12
+ 199 00b4 9091 0000 		lds r25,thisADSR+12+1
+ 200 00b8 A091 0000 		lds r26,thisADSR+12+2
+ 201 00bc B091 0000 		lds r27,thisADSR+12+3
+ 202 00c0 8417      		cp r24,r20
+ 203 00c2 9507      		cpc r25,r21
+ 204 00c4 A607      		cpc r26,r22
+ 205 00c6 B707      		cpc r27,r23
+ 206 00c8 00F4      		brsh .+2
+ 207 00ca 00C0      		rjmp .L22
+ 208               	.L30:
+ 267:ADSR_0_1.c    **** 				thisADSR.state=s_idle;
+ 209               		.loc 1 267 0
+ 210 00cc 1092 0000 		sts thisADSR+16,__zero_reg__
+ 211 00d0 1092 0000 		sts thisADSR+16+1,__zero_reg__
+ 212 00d4 1092 0000 		sts thisADSR+16+2,__zero_reg__
+ 213 00d8 1092 0000 		sts thisADSR+16+3,__zero_reg__
+ 268:ADSR_0_1.c    **** 				LED_IDLE
+ 214               		.loc 1 268 0
+ 215 00dc 1092 0000 		sts thisADSR+24,__zero_reg__
+ 269:ADSR_0_1.c    **** 				// use for cycle mode...
+ 216               		.loc 1 269 0
+ 217 00e0 8BB1      		in r24,0xb
+ 218 00e2 8F60      		ori r24,lo8(15)
+ 219 00e4 8BB9      		out 0xb,r24
+ 271:ADSR_0_1.c    **** 				tmrEOC=0;
+ 220               		.loc 1 271 0
+ 221 00e6 299A      		sbi 0x5,1
+ 272:ADSR_0_1.c    **** 				flgEOC=1;
+ 222               		.loc 1 272 0
+ 223 00e8 1092 0000 		sts tmrEOC,__zero_reg__
+ 273:ADSR_0_1.c    **** 
+ 224               		.loc 1 273 0
+ 225 00ec 81E0      		ldi r24,lo8(1)
+ 226 00ee 8093 0000 		sts flgEOC,r24
+ 227 00f2 00C0      		rjmp .L25
+ 228               	.L6:
+ 152:ADSR_0_1.c    **** 			//linear processing
+ 229               		.loc 1 152 0
+ 230 00f4 8091 0000 		lds r24,flgShape
+ 231 00f8 8823      		tst r24
+ 232 00fa 01F4      		brne .+2
+ 233 00fc 00C0      		rjmp .L9
+ 154:ADSR_0_1.c    **** 				thisADSR.accum=0x7fffffff;
+ 234               		.loc 1 154 0
+ 235 00fe 0091 0000 		lds r16,thisADSR+16
+ 236 0102 1091 0000 		lds r17,thisADSR+16+1
+ 237 0106 2091 0000 		lds r18,thisADSR+16+2
+ 238 010a 3091 0000 		lds r19,thisADSR+16+3
+ 239 010e 4091 0000 		lds r20,thisADSR
+ 240 0112 5091 0000 		lds r21,thisADSR+1
+ 241 0116 6091 0000 		lds r22,thisADSR+2
+ 242 011a 7091 0000 		lds r23,thisADSR+3
+ 243 011e 8FEF      		ldi r24,lo8(-1)
+ 244 0120 9FEF      		ldi r25,lo8(-1)
+ 245 0122 AFEF      		ldi r26,lo8(-1)
+ 246 0124 BFE7      		ldi r27,lo8(127)
+ 247 0126 5C01      		movw r10,r24
+ 248 0128 6D01      		movw r12,r26
+ 249 012a A01A      		sub r10,r16
+ 250 012c B10A      		sbc r11,r17
+ 251 012e C20A      		sbc r12,r18
+ 252 0130 D30A      		sbc r13,r19
+ 253 0132 9601      		movw r18,r12
+ 254 0134 8501      		movw r16,r10
+ 255 0136 0417      		cp r16,r20
+ 256 0138 1507      		cpc r17,r21
+ 257 013a 2607      		cpc r18,r22
+ 258 013c 3707      		cpc r19,r23
+ 259 013e 00F4      		brsh .L10
+ 155:ADSR_0_1.c    **** 				if(flgAR) {
+ 260               		.loc 1 155 0
+ 261 0140 8093 0000 		sts thisADSR+16,r24
+ 262 0144 9093 0000 		sts thisADSR+16+1,r25
+ 263 0148 A093 0000 		sts thisADSR+16+2,r26
+ 264 014c B093 0000 		sts thisADSR+16+3,r27
+ 265               	.L35:
+ 181:ADSR_0_1.c    **** 					thisADSR.state=s_rel;
+ 266               		.loc 1 181 0
+ 267 0150 8091 0000 		lds r24,flgAR
+ 268 0154 8823      		tst r24
+ 269 0156 01F4      		brne .+2
+ 270 0158 00C0      		rjmp .L14
+ 182:ADSR_0_1.c    **** 					LED_RELEASE
+ 271               		.loc 1 182 0
+ 272 015a 84E0      		ldi r24,lo8(4)
+ 273 015c 8093 0000 		sts thisADSR+24,r24
+ 183:ADSR_0_1.c    **** 					} else {
+ 274               		.loc 1 183 0
+ 275 0160 8BB1      		in r24,0xb
+ 276 0162 8F60      		ori r24,lo8(15)
+ 277 0164 8BB9      		out 0xb,r24
+ 278 0166 5B98      		cbi 0xb,3
+ 279               	.L25:
+ 279:ADSR_0_1.c    **** 			break;
+ 280               		.loc 1 279 0
+ 281 0168 8091 0000 		lds r24,thisADSR+16
+ 282 016c 9091 0000 		lds r25,thisADSR+16+1
+ 283 0170 A091 0000 		lds r26,thisADSR+16+2
+ 284 0174 B091 0000 		lds r27,thisADSR+16+3
+ 285 0178 880F      		lsl r24
+ 286 017a 991F      		rol r25
+ 287 017c AA1F      		rol r26
+ 288 017e BB1F      		rol r27
+ 289 0180 8093 0000 		sts thisADSR+20,r24
+ 290 0184 9093 0000 		sts thisADSR+20+1,r25
+ 291 0188 A093 0000 		sts thisADSR+20+2,r26
+ 292 018c B093 0000 		sts thisADSR+20+3,r27
+ 280:ADSR_0_1.c    **** 		}
+ 293               		.loc 1 280 0
+ 294 0190 00C0      		rjmp .L3
+ 295               	.L10:
+ 165:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 296               		.loc 1 165 0
+ 297 0192 8091 0000 		lds r24,thisADSR
+ 298 0196 9091 0000 		lds r25,thisADSR+1
+ 299 019a A091 0000 		lds r26,thisADSR+2
+ 300 019e B091 0000 		lds r27,thisADSR+3
+ 301 01a2 4091 0000 		lds r20,thisADSR+16
+ 302 01a6 5091 0000 		lds r21,thisADSR+16+1
+ 303 01aa 6091 0000 		lds r22,thisADSR+16+2
+ 304 01ae 7091 0000 		lds r23,thisADSR+16+3
+ 305 01b2 B695      		lsr r27
+ 306 01b4 A795      		ror r26
+ 307 01b6 9795      		ror r25
+ 308 01b8 8795      		ror r24
+ 309 01ba 840F      		add r24,r20
+ 310 01bc 951F      		adc r25,r21
+ 311 01be A61F      		adc r26,r22
+ 312 01c0 B71F      		adc r27,r23
+ 313               	.L29:
+ 254:ADSR_0_1.c    **** 			
+ 314               		.loc 1 254 0
+ 315 01c2 8093 0000 		sts thisADSR+16,r24
+ 316 01c6 9093 0000 		sts thisADSR+16+1,r25
+ 317 01ca A093 0000 		sts thisADSR+16+2,r26
+ 318 01ce B093 0000 		sts thisADSR+16+3,r27
+ 319 01d2 00C0      		rjmp .L25
+ 320               	.L9:
+ 170:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[0]*2)+8);
+ 321               		.loc 1 170 0
+ 322 01d4 8090 0000 		lds r8,thisADSR+16
+ 323 01d8 9090 0000 		lds r9,thisADSR+16+1
+ 324 01dc A090 0000 		lds r10,thisADSR+16+2
+ 325 01e0 B090 0000 		lds r11,thisADSR+16+3
+ 171:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt*3;
+ 326               		.loc 1 171 0
+ 327 01e4 2091 0000 		lds r18,rawAdcSum
+ 328 01e8 3091 0000 		lds r19,rawAdcSum+1
+ 170:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[0]*2)+8);
+ 329               		.loc 1 170 0
+ 330 01ec 6FEF      		ldi r22,lo8(-1)
+ 331 01ee 7FEF      		ldi r23,lo8(-1)
+ 332 01f0 8FEF      		ldi r24,lo8(-1)
+ 333 01f2 9FE9      		ldi r25,lo8(-97)
+ 334 01f4 6819      		sub r22,r8
+ 335 01f6 7909      		sbc r23,r9
+ 336 01f8 8A09      		sbc r24,r10
+ 337 01fa 9B09      		sbc r25,r11
+ 171:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt*3;
+ 338               		.loc 1 171 0
+ 339 01fc 2C5F      		subi r18,-4
+ 340 01fe 3F4F      		sbci r19,-1
+ 341 0200 220F      		lsl r18
+ 342 0202 331F      		rol r19
+ 343 0204 50E0      		ldi r21,0
+ 344 0206 40E0      		ldi r20,0
+ 345 0208 0E94 0000 		call __udivmodsi4
+ 172:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/4;
+ 346               		.loc 1 172 0
+ 347 020c A3E0      		ldi r26,lo8(3)
+ 348 020e B0E0      		ldi r27,0
+ 349 0210 0E94 0000 		call __muluhisi3
+ 173:ADSR_0_1.c    **** 			
+ 350               		.loc 1 173 0
+ 351 0214 DC01      		movw r26,r24
+ 352 0216 CB01      		movw r24,r22
+ 353 0218 12E0      		ldi r17,2
+ 354               		1:
+ 355 021a B695      		lsr r27
+ 356 021c A795      		ror r26
+ 357 021e 9795      		ror r25
+ 358 0220 8795      		ror r24
+ 359 0222 1A95      		dec r17
+ 360 0224 01F4      		brne 1b
+ 361 0226 8093 0000 		sts NextExpoAmt.2039,r24
+ 362 022a 9093 0000 		sts NextExpoAmt.2039+1,r25
+ 363 022e A093 0000 		sts NextExpoAmt.2039+2,r26
+ 364 0232 B093 0000 		sts NextExpoAmt.2039+3,r27
+ 179:ADSR_0_1.c    **** 				thisADSR.accum=0x7fffffff;
+ 365               		.loc 1 179 0
+ 366 0236 0091 0000 		lds r16,thisADSR+16
+ 367 023a 1091 0000 		lds r17,thisADSR+16+1
+ 368 023e 2091 0000 		lds r18,thisADSR+16+2
+ 369 0242 3091 0000 		lds r19,thisADSR+16+3
+ 370 0246 4424      		clr r4
+ 371 0248 4A94      		dec r4
+ 372 024a 542C      		mov r5,r4
+ 373 024c 642C      		mov r6,r4
+ 374 024e 4FE7      		ldi r20,lo8(127)
+ 375 0250 742E      		mov r7,r20
+ 376 0252 5301      		movw r10,r6
+ 377 0254 4201      		movw r8,r4
+ 378 0256 801A      		sub r8,r16
+ 379 0258 910A      		sbc r9,r17
+ 380 025a A20A      		sbc r10,r18
+ 381 025c B30A      		sbc r11,r19
+ 382 025e 8C01      		movw r16,r24
+ 383 0260 9D01      		movw r18,r26
+ 384 0262 0150      		subi r16,1
+ 385 0264 1109      		sbc r17,__zero_reg__
+ 386 0266 2F4F      		sbci r18,-1
+ 387 0268 3F4F      		sbci r19,-1
+ 388 026a 0815      		cp r16,r8
+ 389 026c 1905      		cpc r17,r9
+ 390 026e 2A05      		cpc r18,r10
+ 391 0270 3B05      		cpc r19,r11
+ 392 0272 00F0      		brlo .L13
+ 180:ADSR_0_1.c    **** 				if(flgAR) {
+ 393               		.loc 1 180 0
+ 394 0274 4092 0000 		sts thisADSR+16,r4
+ 395 0278 5092 0000 		sts thisADSR+16+1,r5
+ 396 027c 6092 0000 		sts thisADSR+16+2,r6
+ 397 0280 7092 0000 		sts thisADSR+16+3,r7
+ 398 0284 00C0      		rjmp .L35
+ 399               	.L14:
+ 185:ADSR_0_1.c    **** 					LED_DECAY
+ 400               		.loc 1 185 0
+ 401 0286 82E0      		ldi r24,lo8(2)
+ 402 0288 8093 0000 		sts thisADSR+24,r24
+ 186:ADSR_0_1.c    **** 				}
+ 403               		.loc 1 186 0
+ 404 028c 8BB1      		in r24,0xb
+ 405 028e 8F60      		ori r24,lo8(15)
+ 406 0290 8BB9      		out 0xb,r24
+ 407 0292 5A98      		cbi 0xb,2
+ 408 0294 00C0      		rjmp .L25
+ 409               	.L13:
+ 190:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 410               		.loc 1 190 0
+ 411 0296 0091 0000 		lds r16,thisADSR+16
+ 412 029a 1091 0000 		lds r17,thisADSR+16+1
+ 413 029e 2091 0000 		lds r18,thisADSR+16+2
+ 414 02a2 3091 0000 		lds r19,thisADSR+16+3
+ 415 02a6 080F      		add r16,r24
+ 416 02a8 191F      		adc r17,r25
+ 417 02aa 2A1F      		adc r18,r26
+ 418 02ac 3B1F      		adc r19,r27
+ 419 02ae 0093 0000 		sts thisADSR+16,r16
+ 420 02b2 1093 0000 		sts thisADSR+16+1,r17
+ 421 02b6 2093 0000 		sts thisADSR+16+2,r18
+ 422 02ba 3093 0000 		sts thisADSR+16+3,r19
+ 423 02be 00C0      		rjmp .L25
+ 424               	.L4:
+ 197:ADSR_0_1.c    **** 			//linear processing
+ 425               		.loc 1 197 0
+ 426 02c0 8091 0000 		lds r24,flgShape
+ 427 02c4 8823      		tst r24
+ 428 02c6 01F4      		brne .+2
+ 429 02c8 00C0      		rjmp .L16
+ 199:ADSR_0_1.c    **** 				thisADSR.accum=thisADSR.sustain/2;
+ 430               		.loc 1 199 0
+ 431 02ca 8091 0000 		lds r24,thisADSR+16
+ 432 02ce 9091 0000 		lds r25,thisADSR+16+1
+ 433 02d2 A091 0000 		lds r26,thisADSR+16+2
+ 434 02d6 B091 0000 		lds r27,thisADSR+16+3
+ 435 02da 4091 0000 		lds r20,thisADSR+4
+ 436 02de 5091 0000 		lds r21,thisADSR+4+1
+ 437 02e2 6091 0000 		lds r22,thisADSR+4+2
+ 438 02e6 7091 0000 		lds r23,thisADSR+4+3
+ 439 02ea C090 0000 		lds r12,thisADSR+8
+ 440 02ee D090 0000 		lds r13,thisADSR+8+1
+ 441 02f2 E090 0000 		lds r14,thisADSR+8+2
+ 442 02f6 F090 0000 		lds r15,thisADSR+8+3
+ 443 02fa C982      		std Y+1,r12
+ 444 02fc DA82      		std Y+2,r13
+ 445 02fe EB82      		std Y+3,r14
+ 446 0300 FC82      		std Y+4,r15
+ 447 0302 5C01      		movw r10,r24
+ 448 0304 6D01      		movw r12,r26
+ 449 0306 E12C      		mov r14,__zero_reg__
+ 450 0308 F12C      		mov r15,__zero_reg__
+ 451 030a 8701      		movw r16,r14
+ 452 030c 8987      		std Y+9,r24
+ 453 030e BA86      		std Y+10,r11
+ 454 0310 AB87      		std Y+11,r26
+ 455 0312 DC86      		std Y+12,r13
+ 456 0314 ED86      		std Y+13,r14
+ 457 0316 FE86      		std Y+14,r15
+ 458 0318 0F87      		std Y+15,r16
+ 459 031a 188B      		std Y+16,r17
+ 460 031c 1A01      		movw r2,r20
+ 461 031e 2B01      		movw r4,r22
+ 462 0320 9C01      		movw r18,r24
+ 463 0322 AD01      		movw r20,r26
+ 464 0324 60E0      		ldi r22,0
+ 465 0326 70E0      		ldi r23,0
+ 466 0328 80E0      		ldi r24,0
+ 467 032a 90E0      		ldi r25,0
+ 468 032c 5101      		movw r10,r2
+ 469 032e 6201      		movw r12,r4
+ 470 0330 E12C      		mov r14,__zero_reg__
+ 471 0332 F12C      		mov r15,__zero_reg__
+ 472 0334 00E0      		ldi r16,0
+ 473 0336 10E0      		ldi r17,0
+ 474 0338 0E94 0000 		call __subdi3
+ 475 033c 2980      		ldd r2,Y+1
+ 476 033e 3A80      		ldd r3,Y+2
+ 477 0340 4B80      		ldd r4,Y+3
+ 478 0342 5C80      		ldd r5,Y+4
+ 479 0344 5694      		lsr r5
+ 480 0346 4794      		ror r4
+ 481 0348 3794      		ror r3
+ 482 034a 2794      		ror r2
+ 483 034c 5101      		movw r10,r2
+ 484 034e 6201      		movw r12,r4
+ 485 0350 0E94 0000 		call __cmpdi2
+ 486 0354 04F4      		brge .L17
+ 200:ADSR_0_1.c    **** 				thisADSR.state=s_sus;
+ 487               		.loc 1 200 0
+ 488 0356 8091 0000 		lds r24,thisADSR+8
+ 489 035a 9091 0000 		lds r25,thisADSR+8+1
+ 490 035e A091 0000 		lds r26,thisADSR+8+2
+ 491 0362 B091 0000 		lds r27,thisADSR+8+3
+ 492 0366 B695      		lsr r27
+ 493 0368 A795      		ror r26
+ 494 036a 9795      		ror r25
+ 495 036c 8795      		ror r24
+ 496               	.L32:
+ 218:ADSR_0_1.c    **** 				thisADSR.state=s_sus;
+ 497               		.loc 1 218 0
+ 498 036e 8093 0000 		sts thisADSR+16,r24
+ 499 0372 9093 0000 		sts thisADSR+16+1,r25
+ 500 0376 A093 0000 		sts thisADSR+16+2,r26
+ 501 037a B093 0000 		sts thisADSR+16+3,r27
+ 219:ADSR_0_1.c    **** 				LED_SUSTAIN
+ 502               		.loc 1 219 0
+ 503 037e 83E0      		ldi r24,lo8(3)
+ 504 0380 8093 0000 		sts thisADSR+24,r24
+ 220:ADSR_0_1.c    **** 			}
+ 505               		.loc 1 220 0
+ 506 0384 8BB1      		in r24,0xb
+ 507 0386 8F60      		ori r24,lo8(15)
+ 508 0388 8BB9      		out 0xb,r24
+ 509 038a 5998      		cbi 0xb,1
+ 510 038c 00C0      		rjmp .L25
+ 511               	.L17:
+ 205:ADSR_0_1.c    **** 			
+ 512               		.loc 1 205 0
+ 513 038e 4091 0000 		lds r20,thisADSR+4
+ 514 0392 5091 0000 		lds r21,thisADSR+4+1
+ 515 0396 6091 0000 		lds r22,thisADSR+4+2
+ 516 039a 7091 0000 		lds r23,thisADSR+4+3
+ 517               	.L31:
+ 254:ADSR_0_1.c    **** 			
+ 518               		.loc 1 254 0
+ 519 039e 8091 0000 		lds r24,thisADSR+16
+ 520 03a2 9091 0000 		lds r25,thisADSR+16+1
+ 521 03a6 A091 0000 		lds r26,thisADSR+16+2
+ 522 03aa B091 0000 		lds r27,thisADSR+16+3
+ 523 03ae 7695      		lsr r23
+ 524 03b0 6795      		ror r22
+ 525 03b2 5795      		ror r21
+ 526 03b4 4795      		ror r20
+ 527 03b6 841B      		sub r24,r20
+ 528 03b8 950B      		sbc r25,r21
+ 529 03ba A60B      		sbc r26,r22
+ 530 03bc B70B      		sbc r27,r23
+ 531 03be 00C0      		rjmp .L29
+ 532               	.L16:
+ 212:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[1]*3)+12);
+ 533               		.loc 1 212 0
+ 534 03c0 6091 0000 		lds r22,thisADSR+16
+ 535 03c4 7091 0000 		lds r23,thisADSR+16+1
+ 536 03c8 8091 0000 		lds r24,thisADSR+16+2
+ 537 03cc 9091 0000 		lds r25,thisADSR+16+3
+ 538 03d0 4090 0000 		lds r4,thisADSR+8
+ 539 03d4 5090 0000 		lds r5,thisADSR+8+1
+ 540 03d8 6090 0000 		lds r6,thisADSR+8+2
+ 541 03dc 7090 0000 		lds r7,thisADSR+8+3
+ 213:ADSR_0_1.c    **** 			NextExpoAmt=((NextExpoAmt*12)/10);
+ 542               		.loc 1 213 0
+ 543 03e0 4091 0000 		lds r20,rawAdcSum+2
+ 544 03e4 5091 0000 		lds r21,rawAdcSum+2+1
+ 212:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[1]*3)+12);
+ 545               		.loc 1 212 0
+ 546 03e8 7694      		lsr r7
+ 547 03ea 6794      		ror r6
+ 548 03ec 5794      		ror r5
+ 549 03ee 4794      		ror r4
+ 550 03f0 6419      		sub r22,r4
+ 551 03f2 7509      		sbc r23,r5
+ 552 03f4 8609      		sbc r24,r6
+ 553 03f6 9709      		sbc r25,r7
+ 213:ADSR_0_1.c    **** 			NextExpoAmt=((NextExpoAmt*12)/10);
+ 554               		.loc 1 213 0
+ 555 03f8 9A01      		movw r18,r20
+ 556 03fa 220F      		lsl r18
+ 557 03fc 331F      		rol r19
+ 558 03fe 240F      		add r18,r20
+ 559 0400 351F      		adc r19,r21
+ 560 0402 245F      		subi r18,-12
+ 561 0404 3F4F      		sbci r19,-1
+ 562 0406 50E0      		ldi r21,0
+ 563 0408 40E0      		ldi r20,0
+ 564 040a 0E94 0000 		call __udivmodsi4
+ 214:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt;
+ 565               		.loc 1 214 0
+ 566 040e ACE0      		ldi r26,lo8(12)
+ 567 0410 B0E0      		ldi r27,0
+ 568 0412 0E94 0000 		call __muluhisi3
+ 569 0416 2AE0      		ldi r18,lo8(10)
+ 570 0418 30E0      		ldi r19,0
+ 571 041a 40E0      		ldi r20,0
+ 572 041c 50E0      		ldi r21,0
+ 573 041e 0E94 0000 		call __udivmodsi4
+ 574 0422 2901      		movw r4,r18
+ 575 0424 3A01      		movw r6,r20
+ 576 0426 4092 0000 		sts NextExpoAmt.2039,r4
+ 577 042a 5092 0000 		sts NextExpoAmt.2039+1,r5
+ 578 042e 6092 0000 		sts NextExpoAmt.2039+2,r6
+ 579 0432 7092 0000 		sts NextExpoAmt.2039+3,r7
+ 217:ADSR_0_1.c    **** 				thisADSR.accum-=NextExpoAmt*2;
+ 580               		.loc 1 217 0
+ 581 0436 8091 0000 		lds r24,thisADSR+16
+ 582 043a 9091 0000 		lds r25,thisADSR+16+1
+ 583 043e A091 0000 		lds r26,thisADSR+16+2
+ 584 0442 B091 0000 		lds r27,thisADSR+16+3
+ 585 0446 4091 0000 		lds r20,thisADSR+8
+ 586 044a 5091 0000 		lds r21,thisADSR+8+1
+ 587 044e 6091 0000 		lds r22,thisADSR+8+2
+ 588 0452 7091 0000 		lds r23,thisADSR+8+3
+ 589 0456 6C01      		movw r12,r24
+ 590 0458 7D01      		movw r14,r26
+ 591 045a 00E0      		ldi r16,0
+ 592 045c 10E0      		ldi r17,0
+ 593 045e 9801      		movw r18,r16
+ 594 0460 8987      		std Y+9,r24
+ 595 0462 DA86      		std Y+10,r13
+ 596 0464 AB87      		std Y+11,r26
+ 597 0466 FC86      		std Y+12,r15
+ 598 0468 0D87      		std Y+13,r16
+ 599 046a 1E87      		std Y+14,r17
+ 600 046c 2F87      		std Y+15,r18
+ 601 046e 388B      		std Y+16,r19
+ 602 0470 7695      		lsr r23
+ 603 0472 6795      		ror r22
+ 604 0474 5795      		ror r21
+ 605 0476 4795      		ror r20
+ 606 0478 4150      		subi r20,1
+ 607 047a 5109      		sbc r21,__zero_reg__
+ 608 047c 6F4F      		sbci r22,-1
+ 609 047e 7F4F      		sbci r23,-1
+ 610 0480 5A01      		movw r10,r20
+ 611 0482 6B01      		movw r12,r22
+ 612 0484 2985      		ldd r18,Y+9
+ 613 0486 3A85      		ldd r19,Y+10
+ 614 0488 4B85      		ldd r20,Y+11
+ 615 048a 5C85      		ldd r21,Y+12
+ 616 048c 60E0      		ldi r22,0
+ 617 048e 70E0      		ldi r23,0
+ 618 0490 80E0      		ldi r24,0
+ 619 0492 90E0      		ldi r25,0
+ 620 0494 E12C      		mov r14,__zero_reg__
+ 621 0496 F12C      		mov r15,__zero_reg__
+ 622 0498 00E0      		ldi r16,0
+ 623 049a 10E0      		ldi r17,0
+ 624 049c 0E94 0000 		call __subdi3
+ 625 04a0 6301      		movw r12,r6
+ 626 04a2 5201      		movw r10,r4
+ 627 04a4 E12C      		mov r14,__zero_reg__
+ 628 04a6 F12C      		mov r15,__zero_reg__
+ 629 04a8 8701      		movw r16,r14
+ 630 04aa 4982      		std Y+1,r4
+ 631 04ac BA82      		std Y+2,r11
+ 632 04ae 6B82      		std Y+3,r6
+ 633 04b0 DC82      		std Y+4,r13
+ 634 04b2 ED82      		std Y+5,r14
+ 635 04b4 FE82      		std Y+6,r15
+ 636 04b6 0F83      		std Y+7,r16
+ 637 04b8 1887      		std Y+8,r17
+ 638 04ba E12C      		mov r14,__zero_reg__
+ 639 04bc F12C      		mov r15,__zero_reg__
+ 640 04be 00E0      		ldi r16,0
+ 641 04c0 10E0      		ldi r17,0
+ 642 04c2 440C      		lsl r4
+ 643 04c4 551C      		rol r5
+ 644 04c6 661C      		rol r6
+ 645 04c8 771C      		rol r7
+ 646 04ca 0E94 0000 		call __cmpdi2
+ 647 04ce 04F4      		brge .L19
+ 218:ADSR_0_1.c    **** 				thisADSR.state=s_sus;
+ 648               		.loc 1 218 0
+ 649 04d0 8091 0000 		lds r24,thisADSR+16
+ 650 04d4 9091 0000 		lds r25,thisADSR+16+1
+ 651 04d8 A091 0000 		lds r26,thisADSR+16+2
+ 652 04dc B091 0000 		lds r27,thisADSR+16+3
+ 653 04e0 8419      		sub r24,r4
+ 654 04e2 9509      		sbc r25,r5
+ 655 04e4 A609      		sbc r26,r6
+ 656 04e6 B709      		sbc r27,r7
+ 657 04e8 00C0      		rjmp .L32
+ 658               	.L19:
+ 223:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 659               		.loc 1 223 0
+ 660 04ea 8091 0000 		lds r24,thisADSR+16
+ 661 04ee 9091 0000 		lds r25,thisADSR+16+1
+ 662 04f2 A091 0000 		lds r26,thisADSR+16+2
+ 663 04f6 B091 0000 		lds r27,thisADSR+16+3
+ 664 04fa 8419      		sub r24,r4
+ 665 04fc 9509      		sbc r25,r5
+ 666 04fe A609      		sbc r26,r6
+ 667 0500 B709      		sbc r27,r7
+ 668 0502 00C0      		rjmp .L29
+ 669               	.L7:
+ 230:ADSR_0_1.c    **** 		thisADSR.curDac=thisADSR.accum*2;
+ 670               		.loc 1 230 0
+ 671 0504 8091 0000 		lds r24,thisADSR+8
+ 672 0508 9091 0000 		lds r25,thisADSR+8+1
+ 673 050c A091 0000 		lds r26,thisADSR+8+2
+ 674 0510 B091 0000 		lds r27,thisADSR+8+3
+ 675 0514 B695      		lsr r27
+ 676 0516 A795      		ror r26
+ 677 0518 9795      		ror r25
+ 678 051a 8795      		ror r24
+ 679 051c 8093 0000 		sts thisADSR+16,r24
+ 680 0520 9093 0000 		sts thisADSR+16+1,r25
+ 681 0524 A093 0000 		sts thisADSR+16+2,r26
+ 682 0528 B093 0000 		sts thisADSR+16+3,r27
+ 231:ADSR_0_1.c    **** 		//if(PORTA.IN & PIN6_bm)
+ 683               		.loc 1 231 0
+ 684 052c 8091 0000 		lds r24,thisADSR+16
+ 685 0530 9091 0000 		lds r25,thisADSR+16+1
+ 686 0534 A091 0000 		lds r26,thisADSR+16+2
+ 687 0538 B091 0000 		lds r27,thisADSR+16+3
+ 688 053c 880F      		lsl r24
+ 689 053e 991F      		rol r25
+ 690 0540 AA1F      		rol r26
+ 691 0542 BB1F      		rol r27
+ 692 0544 8093 0000 		sts thisADSR+20,r24
+ 693 0548 9093 0000 		sts thisADSR+20+1,r25
+ 694 054c A093 0000 		sts thisADSR+20+2,r26
+ 695 0550 B093 0000 		sts thisADSR+20+3,r27
+ 233:ADSR_0_1.c    **** 			thisADSR.state=s_rel;						// jump to release state
+ 696               		.loc 1 233 0
+ 697 0554 4C9B      		sbis 0x9,4
+ 698 0556 00C0      		rjmp .L3
+ 234:ADSR_0_1.c    **** 			LED_RELEASE
+ 699               		.loc 1 234 0
+ 700 0558 84E0      		ldi r24,lo8(4)
+ 701 055a 8093 0000 		sts thisADSR+24,r24
+ 235:ADSR_0_1.c    **** 		}
+ 702               		.loc 1 235 0
+ 703 055e 8BB1      		in r24,0xb
+ 704 0560 8F60      		ori r24,lo8(15)
+ 705 0562 8BB9      		out 0xb,r24
+ 706 0564 5B98      		cbi 0xb,3
+ 707 0566 00C0      		rjmp .L3
+ 708               	.L22:
+ 254:ADSR_0_1.c    **** 			
+ 709               		.loc 1 254 0
+ 710 0568 4091 0000 		lds r20,thisADSR+12
+ 711 056c 5091 0000 		lds r21,thisADSR+12+1
+ 712 0570 6091 0000 		lds r22,thisADSR+12+2
+ 713 0574 7091 0000 		lds r23,thisADSR+12+3
+ 714 0578 00C0      		rjmp .L31
+ 715               	.L21:
+ 260:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt/((rawAdcSum[3]*3)+12);
+ 716               		.loc 1 260 0
+ 717 057a 6091 0000 		lds r22,thisADSR+16
+ 718 057e 7091 0000 		lds r23,thisADSR+16+1
+ 719 0582 8091 0000 		lds r24,thisADSR+16+2
+ 720 0586 9091 0000 		lds r25,thisADSR+16+3
+ 261:ADSR_0_1.c    **** 			NextExpoAmt=((NextExpoAmt*3)/2);
+ 721               		.loc 1 261 0
+ 722 058a 4091 0000 		lds r20,rawAdcSum+6
+ 723 058e 5091 0000 		lds r21,rawAdcSum+6+1
+ 724 0592 9A01      		movw r18,r20
+ 725 0594 220F      		lsl r18
+ 726 0596 331F      		rol r19
+ 727 0598 240F      		add r18,r20
+ 728 059a 351F      		adc r19,r21
+ 729 059c 245F      		subi r18,-12
+ 730 059e 3F4F      		sbci r19,-1
+ 731 05a0 50E0      		ldi r21,0
+ 732 05a2 40E0      		ldi r20,0
+ 733 05a4 0E94 0000 		call __udivmodsi4
+ 262:ADSR_0_1.c    **** 			NextExpoAmt=NextExpoAmt;
+ 734               		.loc 1 262 0
+ 735 05a8 A3E0      		ldi r26,lo8(3)
+ 736 05aa B0E0      		ldi r27,0
+ 737 05ac 0E94 0000 		call __muluhisi3
+ 738 05b0 2B01      		movw r4,r22
+ 739 05b2 3C01      		movw r6,r24
+ 740 05b4 7694      		lsr r7
+ 741 05b6 6794      		ror r6
+ 742 05b8 5794      		ror r5
+ 743 05ba 4794      		ror r4
+ 744 05bc 4092 0000 		sts NextExpoAmt.2039,r4
+ 745 05c0 5092 0000 		sts NextExpoAmt.2039+1,r5
+ 746 05c4 6092 0000 		sts NextExpoAmt.2039+2,r6
+ 747 05c8 7092 0000 		sts NextExpoAmt.2039+3,r7
+ 266:ADSR_0_1.c    **** 				thisADSR.accum=0;
+ 748               		.loc 1 266 0
+ 749 05cc 0091 0000 		lds r16,thisADSR+16
+ 750 05d0 1091 0000 		lds r17,thisADSR+16+1
+ 751 05d4 2091 0000 		lds r18,thisADSR+16+2
+ 752 05d8 3091 0000 		lds r19,thisADSR+16+3
+ 753 05dc 4FEF      		ldi r20,-1
+ 754 05de 440E      		add r4,r20
+ 755 05e0 541E      		adc r5,r20
+ 756 05e2 611C      		adc r6,__zero_reg__
+ 757 05e4 711C      		adc r7,__zero_reg__
+ 758 05e6 0415      		cp r16,r4
+ 759 05e8 1505      		cpc r17,r5
+ 760 05ea 2605      		cpc r18,r6
+ 761 05ec 3705      		cpc r19,r7
+ 762 05ee 00F4      		brsh .+2
+ 763 05f0 00C0      		rjmp .L30
+ 278:ADSR_0_1.c    **** 			thisADSR.curDac=thisADSR.accum*2;
+ 764               		.loc 1 278 0
+ 765 05f2 4090 0000 		lds r4,thisADSR+16
+ 766 05f6 5090 0000 		lds r5,thisADSR+16+1
+ 767 05fa 6090 0000 		lds r6,thisADSR+16+2
+ 768 05fe 7090 0000 		lds r7,thisADSR+16+3
+ 769 0602 9B01      		movw r18,r22
+ 770 0604 AC01      		movw r20,r24
+ 771 0606 64E0      		ldi r22,4
+ 772               		1:
+ 773 0608 5695      		lsr r21
+ 774 060a 4795      		ror r20
+ 775 060c 3795      		ror r19
+ 776 060e 2795      		ror r18
+ 777 0610 6A95      		dec r22
+ 778 0612 01F4      		brne 1b
+ 779 0614 A2E1      		ldi r26,lo8(18)
+ 780 0616 B0E0      		ldi r27,0
+ 781 0618 0E94 0000 		call __muluhisi3
+ 782 061c 461A      		sub r4,r22
+ 783 061e 570A      		sbc r5,r23
+ 784 0620 680A      		sbc r6,r24
+ 785 0622 790A      		sbc r7,r25
+ 786 0624 4092 0000 		sts thisADSR+16,r4
+ 787 0628 5092 0000 		sts thisADSR+16+1,r5
+ 788 062c 6092 0000 		sts thisADSR+16+2,r6
+ 789 0630 7092 0000 		sts thisADSR+16+3,r7
+ 790 0634 00C0      		rjmp .L25
+ 791               		.cfi_endproc
+ 792               	.LFE7:
+ 794               	.global	init_devices
+ 796               	init_devices:
+ 797               	.LFB8:
+ 285:ADSR_0_1.c    **** 
+ 286:ADSR_0_1.c    **** 
+ 287:ADSR_0_1.c    **** void init_devices(void)
+ 288:ADSR_0_1.c    **** {
+ 798               		.loc 1 288 0
+ 799               		.cfi_startproc
+ 800               	/* prologue: function */
+ 801               	/* frame size = 0 */
+ 802               	/* stack size = 0 */
+ 803               	.L__stack_usage = 0
+ 289:ADSR_0_1.c    **** 	//
+ 290:ADSR_0_1.c    **** 	// sets up ADC system
+ 291:ADSR_0_1.c    **** 	//
+ 292:ADSR_0_1.c    **** 	ADMUX = (1<<REFS0);		//AVCC as reference
+ 804               		.loc 1 292 0
+ 805 0636 80E4      		ldi r24,lo8(64)
+ 806 0638 8093 7C00 		sts 124,r24
+ 293:ADSR_0_1.c    **** 	ADCSRA = (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0)|(1<<ADEN);
+ 807               		.loc 1 293 0
+ 808 063c 87E8      		ldi r24,lo8(-121)
+ 809 063e 8093 7A00 		sts 122,r24
+ 294:ADSR_0_1.c    **** 
+ 295:ADSR_0_1.c    **** 	//
+ 296:ADSR_0_1.c    **** 	// enable IRQ on Gate jack input
+ 297:ADSR_0_1.c    **** 	PCMSK2 = (1<<PCINT20);		
+ 810               		.loc 1 297 0
+ 811 0642 80E1      		ldi r24,lo8(16)
+ 812 0644 8093 6D00 		sts 109,r24
+ 298:ADSR_0_1.c    **** 	PCICR = (1<<PCIE2);						//enable interrupts
+ 813               		.loc 1 298 0
+ 814 0648 84E0      		ldi r24,lo8(4)
+ 815 064a 8093 6800 		sts 104,r24
+ 299:ADSR_0_1.c    **** 	
+ 300:ADSR_0_1.c    **** 	// ***SPI***
+ 301:ADSR_0_1.c    **** 	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0);	// SPI enable	
+ 816               		.loc 1 301 0
+ 817 064e 81E5      		ldi r24,lo8(81)
+ 818 0650 8CBD      		out 0x2c,r24
+ 819               	/* epilogue start */
+ 302:ADSR_0_1.c    **** }
+ 820               		.loc 1 302 0
+ 821 0652 0895      		ret
+ 822               		.cfi_endproc
+ 823               	.LFE8:
+ 825               	.global	pgm_init
+ 827               	pgm_init:
+ 828               	.LFB9:
+ 303:ADSR_0_1.c    **** 
+ 304:ADSR_0_1.c    **** 
+ 305:ADSR_0_1.c    **** void pgm_init(void)
+ 306:ADSR_0_1.c    **** {
+ 829               		.loc 1 306 0
+ 830               		.cfi_startproc
+ 831               	/* prologue: function */
+ 832               	/* frame size = 0 */
+ 833               	/* stack size = 0 */
+ 834               	.L__stack_usage = 0
+ 307:ADSR_0_1.c    **** 	// setup mux channel
+ 308:ADSR_0_1.c    **** 	thisAdcChannel=0;
+ 835               		.loc 1 308 0
+ 836 0654 1092 0000 		sts thisAdcChannel,__zero_reg__
+ 309:ADSR_0_1.c    **** 	ADMUX |= thisAdcChannel;
+ 837               		.loc 1 309 0
+ 838 0658 ECE7      		ldi r30,lo8(124)
+ 839 065a F0E0      		ldi r31,0
+ 840 065c 8081      		ld r24,Z
+ 841 065e 8083      		st Z,r24
+ 310:ADSR_0_1.c    **** 	LED_IDLE
+ 842               		.loc 1 310 0
+ 843 0660 8BB1      		in r24,0xb
+ 844 0662 8F60      		ori r24,lo8(15)
+ 845 0664 8BB9      		out 0xb,r24
+ 311:ADSR_0_1.c    **** 	SS_HI;
+ 846               		.loc 1 311 0
+ 847 0666 2A9A      		sbi 0x5,2
+ 848               	/* epilogue start */
+ 312:ADSR_0_1.c    **** }
+ 849               		.loc 1 312 0
+ 850 0668 0895      		ret
+ 851               		.cfi_endproc
+ 852               	.LFE9:
+ 854               	.global	adcProcess
+ 856               	adcProcess:
+ 857               	.LFB10:
+ 313:ADSR_0_1.c    **** 
+ 314:ADSR_0_1.c    **** 
+ 315:ADSR_0_1.c    **** void adcProcess(void)
+ 316:ADSR_0_1.c    **** {
+ 858               		.loc 1 316 0
+ 859               		.cfi_startproc
+ 860 066a CF92      		push r12
+ 861               	.LCFI20:
+ 862               		.cfi_def_cfa_offset 3
+ 863               		.cfi_offset 12, -2
+ 864 066c DF92      		push r13
+ 865               	.LCFI21:
+ 866               		.cfi_def_cfa_offset 4
+ 867               		.cfi_offset 13, -3
+ 868 066e EF92      		push r14
+ 869               	.LCFI22:
+ 870               		.cfi_def_cfa_offset 5
+ 871               		.cfi_offset 14, -4
+ 872 0670 FF92      		push r15
+ 873               	.LCFI23:
+ 874               		.cfi_def_cfa_offset 6
+ 875               		.cfi_offset 15, -5
+ 876 0672 0F93      		push r16
+ 877               	.LCFI24:
+ 878               		.cfi_def_cfa_offset 7
+ 879               		.cfi_offset 16, -6
+ 880 0674 1F93      		push r17
+ 881               	.LCFI25:
+ 882               		.cfi_def_cfa_offset 8
+ 883               		.cfi_offset 17, -7
+ 884 0676 CF93      		push r28
+ 885               	.LCFI26:
+ 886               		.cfi_def_cfa_offset 9
+ 887               		.cfi_offset 28, -8
+ 888 0678 DF93      		push r29
+ 889               	.LCFI27:
+ 890               		.cfi_def_cfa_offset 10
+ 891               		.cfi_offset 29, -9
+ 892               	/* prologue: function */
+ 893               	/* frame size = 0 */
+ 894               	/* stack size = 8 */
+ 895               	.L__stack_usage = 8
+ 317:ADSR_0_1.c    **** 	rawAdcSum[0]=rawAdcPots[0]+adsr_cv;
+ 896               		.loc 1 317 0
+ 897 067a E0E0      		ldi r30,lo8(rawAdcPots)
+ 898 067c F0E0      		ldi r31,hi8(rawAdcPots)
+ 899 067e 2081      		ld r18,Z
+ 900 0680 3181      		ldd r19,Z+1
+ 901 0682 8091 0000 		lds r24,adsr_cv
+ 902 0686 9091 0000 		lds r25,adsr_cv+1
+ 903 068a 280F      		add r18,r24
+ 904 068c 391F      		adc r19,r25
+ 905 068e C0E0      		ldi r28,lo8(rawAdcSum)
+ 906 0690 D0E0      		ldi r29,hi8(rawAdcSum)
+ 907 0692 3983      		std Y+1,r19
+ 908 0694 2883      		st Y,r18
+ 318:ADSR_0_1.c    **** 	rawAdcSum[1]=rawAdcPots[1]+adsr_cv;
+ 909               		.loc 1 318 0
+ 910 0696 2281      		ldd r18,Z+2
+ 911 0698 3381      		ldd r19,Z+3
+ 912 069a 280F      		add r18,r24
+ 913 069c 391F      		adc r19,r25
+ 914 069e 3B83      		std Y+3,r19
+ 915 06a0 2A83      		std Y+2,r18
+ 319:ADSR_0_1.c    **** 	rawAdcSum[2]=rawAdcPots[2];
+ 916               		.loc 1 319 0
+ 917 06a2 2481      		ldd r18,Z+4
+ 918 06a4 3581      		ldd r19,Z+5
+ 919 06a6 3D83      		std Y+5,r19
+ 920 06a8 2C83      		std Y+4,r18
+ 320:ADSR_0_1.c    **** 	rawAdcSum[3]=rawAdcPots[3]+adsr_cv+rel_cv;
+ 921               		.loc 1 320 0
+ 922 06aa 2681      		ldd r18,Z+6
+ 923 06ac 3781      		ldd r19,Z+7
+ 924 06ae 820F      		add r24,r18
+ 925 06b0 931F      		adc r25,r19
+ 926 06b2 2091 0000 		lds r18,rel_cv
+ 927 06b6 3091 0000 		lds r19,rel_cv+1
+ 928 06ba 820F      		add r24,r18
+ 929 06bc 931F      		adc r25,r19
+ 930 06be 9F83      		std Y+7,r25
+ 931 06c0 8E83      		std Y+6,r24
+ 321:ADSR_0_1.c    **** 	
+ 322:ADSR_0_1.c    **** 	thisADSR.attack=0x20000000/((rawAdcSum[0]+0x02)/0x02);
+ 932               		.loc 1 322 0
+ 933 06c2 2881      		ld r18,Y
+ 934 06c4 3981      		ldd r19,Y+1
+ 935 06c6 2E5F      		subi r18,-2
+ 936 06c8 3F4F      		sbci r19,-1
+ 937 06ca 3695      		lsr r19
+ 938 06cc 2795      		ror r18
+ 939 06ce 50E0      		ldi r21,0
+ 940 06d0 40E0      		ldi r20,0
+ 941 06d2 C12C      		mov r12,__zero_reg__
+ 942 06d4 D12C      		mov r13,__zero_reg__
+ 943 06d6 E12C      		mov r14,__zero_reg__
+ 944 06d8 90E2      		ldi r25,lo8(32)
+ 945 06da F92E      		mov r15,r25
+ 946 06dc C701      		movw r24,r14
+ 947 06de B601      		movw r22,r12
+ 948 06e0 0E94 0000 		call __divmodsi4
+ 949 06e4 00E0      		ldi r16,lo8(thisADSR)
+ 950 06e6 10E0      		ldi r17,hi8(thisADSR)
+ 951 06e8 F801      		movw r30,r16
+ 952 06ea 2083      		st Z,r18
+ 953 06ec 3183      		std Z+1,r19
+ 954 06ee 4283      		std Z+2,r20
+ 955 06f0 5383      		std Z+3,r21
+ 323:ADSR_0_1.c    **** 	thisADSR.decay=0x20000000/((rawAdcSum[1]+0x02)/0x02);
+ 956               		.loc 1 323 0
+ 957 06f2 2A81      		ldd r18,Y+2
+ 958 06f4 3B81      		ldd r19,Y+3
+ 959 06f6 2E5F      		subi r18,-2
+ 960 06f8 3F4F      		sbci r19,-1
+ 961 06fa 3695      		lsr r19
+ 962 06fc 2795      		ror r18
+ 963 06fe 50E0      		ldi r21,0
+ 964 0700 40E0      		ldi r20,0
+ 965 0702 C701      		movw r24,r14
+ 966 0704 B601      		movw r22,r12
+ 967 0706 0E94 0000 		call __divmodsi4
+ 968 070a F801      		movw r30,r16
+ 969 070c 2483      		std Z+4,r18
+ 970 070e 3583      		std Z+5,r19
+ 971 0710 4683      		std Z+6,r20
+ 972 0712 5783      		std Z+7,r21
+ 324:ADSR_0_1.c    **** 	thisADSR.sustain=(uint32_t)rawAdcSum[2]<<22;
+ 973               		.loc 1 324 0
+ 974 0714 8C81      		ldd r24,Y+4
+ 975 0716 9D81      		ldd r25,Y+5
+ 976 0718 B0E0      		ldi r27,0
+ 977 071a A0E0      		ldi r26,0
+ 978 071c 56E1      		ldi r21,22
+ 979               		1:
+ 980 071e 880F      		lsl r24
+ 981 0720 991F      		rol r25
+ 982 0722 AA1F      		rol r26
+ 983 0724 BB1F      		rol r27
+ 984 0726 5A95      		dec r21
+ 985 0728 01F4      		brne 1b
+ 986 072a 8087      		std Z+8,r24
+ 987 072c 9187      		std Z+9,r25
+ 988 072e A287      		std Z+10,r26
+ 989 0730 B387      		std Z+11,r27
+ 325:ADSR_0_1.c    **** 	thisADSR.release=0x20000000/((rawAdcSum[3]+0x02)/0x02);
+ 990               		.loc 1 325 0
+ 991 0732 2E81      		ldd r18,Y+6
+ 992 0734 3F81      		ldd r19,Y+7
+ 993 0736 2E5F      		subi r18,-2
+ 994 0738 3F4F      		sbci r19,-1
+ 995 073a 3695      		lsr r19
+ 996 073c 2795      		ror r18
+ 997 073e 50E0      		ldi r21,0
+ 998 0740 40E0      		ldi r20,0
+ 999 0742 C701      		movw r24,r14
+ 1000 0744 B601      		movw r22,r12
+ 1001 0746 0E94 0000 		call __divmodsi4
+ 1002 074a F801      		movw r30,r16
+ 1003 074c 2487      		std Z+12,r18
+ 1004 074e 3587      		std Z+13,r19
+ 1005 0750 4687      		std Z+14,r20
+ 1006 0752 5787      		std Z+15,r21
+ 1007               	/* epilogue start */
+ 326:ADSR_0_1.c    **** }
+ 1008               		.loc 1 326 0
+ 1009 0754 DF91      		pop r29
+ 1010 0756 CF91      		pop r28
+ 1011 0758 1F91      		pop r17
+ 1012 075a 0F91      		pop r16
+ 1013 075c FF90      		pop r15
+ 1014 075e EF90      		pop r14
+ 1015 0760 DF90      		pop r13
+ 1016 0762 CF90      		pop r12
+ 1017 0764 0895      		ret
+ 1018               		.cfi_endproc
+ 1019               	.LFE10:
+ 1021               	.global	SendToShiftyTypes
+ 1023               	SendToShiftyTypes:
+ 1024               	.LFB11:
+ 327:ADSR_0_1.c    **** 
+ 328:ADSR_0_1.c    **** 
+ 329:ADSR_0_1.c    **** void SendToShiftyTypes(void)
+ 330:ADSR_0_1.c    **** {
+ 1025               		.loc 1 330 0
+ 1026               		.cfi_startproc
+ 1027               	/* prologue: function */
+ 1028               	/* frame size = 0 */
+ 1029               	/* stack size = 0 */
+ 1030               	.L__stack_usage = 0
+ 331:ADSR_0_1.c    **** 	uint8_t		dummy;
+ 332:ADSR_0_1.c    **** 	uint16_t	sendVal;
+ 333:ADSR_0_1.c    **** 
+ 334:ADSR_0_1.c    **** 	cli();
+ 1031               		.loc 1 334 0
+ 1032               	/* #APP */
+ 1033               	 ;  334 "ADSR_0_1.c" 1
+ 1034 0766 F894      		cli
+ 1035               	 ;  0 "" 2
+ 335:ADSR_0_1.c    **** 	SS_LO;
+ 1036               		.loc 1 335 0
+ 1037               	/* #NOAPP */
+ 1038 0768 2A98      		cbi 0x5,2
+ 336:ADSR_0_1.c    **** 	
+ 337:ADSR_0_1.c    **** 	sendVal = thisADSR.curDac>>20;
+ 1039               		.loc 1 337 0
+ 1040 076a 8091 0000 		lds r24,thisADSR+20
+ 1041 076e 9091 0000 		lds r25,thisADSR+20+1
+ 1042 0772 A091 0000 		lds r26,thisADSR+20+2
+ 1043 0776 B091 0000 		lds r27,thisADSR+20+3
+ 1044 077a 24E1      		ldi r18,20
+ 1045               		1:
+ 1046 077c B695      		lsr r27
+ 1047 077e A795      		ror r26
+ 1048 0780 9795      		ror r25
+ 1049 0782 8795      		ror r24
+ 1050 0784 2A95      		dec r18
+ 1051 0786 01F4      		brne 1b
+ 1052               	.LVL0:
+ 338:ADSR_0_1.c    **** 	sendVal = sendVal | 0x3000;			//gain=1,active mode
+ 1053               		.loc 1 338 0
+ 1054 0788 9063      		ori r25,48
+ 1055               	.LVL1:
+ 339:ADSR_0_1.c    **** 	
+ 340:ADSR_0_1.c    **** 	SPDR=sendVal>>8;					// send MSB
+ 1056               		.loc 1 340 0
+ 1057 078a 9EBD      		out 0x2e,r25
+ 1058               	.L40:
+ 341:ADSR_0_1.c    **** 	do {} while (!(SPSR&(1<<SPIF)));
+ 1059               		.loc 1 341 0 discriminator 1
+ 1060 078c 0DB4      		in __tmp_reg__,0x2d
+ 1061 078e 07FE      		sbrs __tmp_reg__,7
+ 1062 0790 00C0      		rjmp .L40
+ 342:ADSR_0_1.c    **** 	dummy=SPDR; 				//dummy read to clear flag
+ 1063               		.loc 1 342 0
+ 1064 0792 9EB5      		in r25,0x2e
+ 343:ADSR_0_1.c    **** 
+ 344:ADSR_0_1.c    **** 	SPDR=sendVal&0x00FF;				// send LSB
+ 1065               		.loc 1 344 0
+ 1066 0794 8EBD      		out 0x2e,r24
+ 1067               	.L41:
+ 345:ADSR_0_1.c    **** 	do {} while (!(SPSR&(1<<SPIF)));
+ 1068               		.loc 1 345 0 discriminator 1
+ 1069 0796 0DB4      		in __tmp_reg__,0x2d
+ 1070 0798 07FE      		sbrs __tmp_reg__,7
+ 1071 079a 00C0      		rjmp .L41
+ 346:ADSR_0_1.c    **** 	dummy=SPDR; 				//dummy read to clear flag
+ 1072               		.loc 1 346 0
+ 1073 079c 8EB5      		in r24,0x2e
+ 1074               	.LVL2:
+ 347:ADSR_0_1.c    **** 	
+ 348:ADSR_0_1.c    **** 	SS_HI;
+ 1075               		.loc 1 348 0
+ 1076 079e 2A9A      		sbi 0x5,2
+ 349:ADSR_0_1.c    **** 	sei();
+ 1077               		.loc 1 349 0
+ 1078               	/* #APP */
+ 1079               	 ;  349 "ADSR_0_1.c" 1
+ 1080 07a0 7894      		sei
+ 1081               	 ;  0 "" 2
+ 1082               	/* epilogue start */
+ 350:ADSR_0_1.c    **** }
+ 1083               		.loc 1 350 0
+ 1084               	/* #NOAPP */
+ 1085 07a2 0895      		ret
+ 1086               		.cfi_endproc
+ 1087               	.LFE11:
+ 1089               	.global	timer_init
+ 1091               	timer_init:
+ 1092               	.LFB12:
+ 351:ADSR_0_1.c    **** 
+ 352:ADSR_0_1.c    **** void timer_init(void)
+ 353:ADSR_0_1.c    **** {
+ 1093               		.loc 1 353 0
+ 1094               		.cfi_startproc
+ 1095               	/* prologue: function */
+ 1096               	/* frame size = 0 */
+ 1097               	/* stack size = 0 */
+ 1098               	.L__stack_usage = 0
+ 354:ADSR_0_1.c    **** 	// for 20.0000MHz clock
+ 355:ADSR_0_1.c    **** 	// timer 0 is the 1mS (0.5mS?) tick
+ 356:ADSR_0_1.c    **** 	TCCR0A  = (1<<WGM01);					// ctc mode
+ 1099               		.loc 1 356 0
+ 1100 07a4 82E0      		ldi r24,lo8(2)
+ 1101 07a6 84BD      		out 0x24,r24
+ 357:ADSR_0_1.c    **** 	TCCR0B  = (1<<CS02); 					// divide by 256
+ 1102               		.loc 1 357 0
+ 1103 07a8 94E0      		ldi r25,lo8(4)
+ 1104 07aa 95BD      		out 0x25,r25
+ 358:ADSR_0_1.c    **** 	OCR0A   = 0x26;							// or 38 decimal -- 0.5mS
+ 1105               		.loc 1 358 0
+ 1106 07ac 96E2      		ldi r25,lo8(38)
+ 1107 07ae 97BD      		out 0x27,r25
+ 359:ADSR_0_1.c    **** 	TIMSK0	= 1<<OCIE0A;					// output compare A match irq
+ 1108               		.loc 1 359 0
+ 1109 07b0 8093 6E00 		sts 110,r24
+ 1110               	/* epilogue start */
+ 360:ADSR_0_1.c    **** }
+ 1111               		.loc 1 360 0
+ 1112 07b4 0895      		ret
+ 1113               		.cfi_endproc
+ 1114               	.LFE12:
+ 1116               		.section	.text.startup,"ax",@progbits
+ 1117               	.global	main
+ 1119               	main:
+ 1120               	.LFB5:
+  84:ADSR_0_1.c    **** 	cli();
+ 1121               		.loc 1 84 0
+ 1122               		.cfi_startproc
+ 1123               	/* prologue: function */
+ 1124               	/* frame size = 0 */
+ 1125               	/* stack size = 0 */
+ 1126               	.L__stack_usage = 0
+  85:ADSR_0_1.c    **** 	init_ports();
+ 1127               		.loc 1 85 0
+ 1128               	/* #APP */
+ 1129               	 ;  85 "ADSR_0_1.c" 1
+ 1130 0000 F894      		cli
+ 1131               	 ;  0 "" 2
+  86:ADSR_0_1.c    **** 	init_devices();
+ 1132               		.loc 1 86 0
+ 1133               	/* #NOAPP */
+ 1134 0002 0E94 0000 		call init_ports
+ 1135               	.LVL3:
+  87:ADSR_0_1.c    **** 	timer_init();
+ 1136               		.loc 1 87 0
+ 1137 0006 0E94 0000 		call init_devices
+ 1138               	.LVL4:
+  88:ADSR_0_1.c    **** 	pgm_init();
+ 1139               		.loc 1 88 0
+ 1140 000a 0E94 0000 		call timer_init
+ 1141               	.LVL5:
+  89:ADSR_0_1.c    **** 	sei();
+ 1142               		.loc 1 89 0
+ 1143 000e 0E94 0000 		call pgm_init
+ 1144               	.LVL6:
+  90:ADSR_0_1.c    **** 	
+ 1145               		.loc 1 90 0
+ 1146               	/* #APP */
+ 1147               	 ;  90 "ADSR_0_1.c" 1
+ 1148 0012 7894      		sei
+ 1149               	 ;  0 "" 2
+  92:ADSR_0_1.c    **** 	ADCSRA |= (1<<ADSC);				//start next conversion
+ 1150               		.loc 1 92 0
+ 1151               	/* #NOAPP */
+ 1152 0014 8091 7A00 		lds r24,122
+ 1153 0018 8860      		ori r24,lo8(8)
+ 1154 001a 8093 7A00 		sts 122,r24
+  93:ADSR_0_1.c    **** 
+ 1155               		.loc 1 93 0
+ 1156 001e 8091 7A00 		lds r24,122
+ 1157 0022 8064      		ori r24,lo8(64)
+ 1158 0024 8093 7A00 		sts 122,r24
+ 102:ADSR_0_1.c    **** 		}
+ 1159               		.loc 1 102 0
+ 1160 0028 C1E0      		ldi r28,lo8(1)
+ 1161               	.L47:
+  98:ADSR_0_1.c    **** 		{
+ 1162               		.loc 1 98 0
+ 1163 002a 8091 0000 		lds r24,flgGate
+ 1164 002e 8823      		tst r24
+ 1165 0030 01F0      		breq .L46
+ 100:ADSR_0_1.c    **** 			LED_ATTACK
+ 1166               		.loc 1 100 0
+ 1167 0032 1092 0000 		sts flgGate,__zero_reg__
+ 101:ADSR_0_1.c    **** 			thisADSR.state = s_att;
+ 1168               		.loc 1 101 0
+ 1169 0036 8BB1      		in r24,0xb
+ 1170 0038 8F60      		ori r24,lo8(15)
+ 1171 003a 8BB9      		out 0xb,r24
+ 1172 003c 5898      		cbi 0xb,0
+ 102:ADSR_0_1.c    **** 		}
+ 1173               		.loc 1 102 0
+ 1174 003e C093 0000 		sts thisADSR+24,r28
+ 1175               	.L46:
+ 107:ADSR_0_1.c    **** 		{
+ 1176               		.loc 1 107 0
+ 1177 0042 8091 0000 		lds r24,flgProcess
+ 1178 0046 8823      		tst r24
+ 1179 0048 01F0      		breq .L47
+ 109:ADSR_0_1.c    **** 			// set env based on switch
+ 1180               		.loc 1 109 0
+ 1181 004a 1092 0000 		sts flgProcess,__zero_reg__
+ 111:ADSR_0_1.c    **** 				flgAR=0;		// adsr
+ 1182               		.loc 1 111 0
+ 1183 004e 4F9B      		sbis 0x9,7
+ 1184 0050 00C0      		rjmp .L48
+ 112:ADSR_0_1.c    **** 			else
+ 1185               		.loc 1 112 0
+ 1186 0052 1092 0000 		sts flgAR,__zero_reg__
+ 1187               	.L49:
+ 115:ADSR_0_1.c    **** 				thisADSR.state = s_att;
+ 1188               		.loc 1 115 0
+ 1189 0056 8091 0000 		lds r24,flgAR
+ 1190 005a 9091 0000 		lds r25,flgARold
+ 1191 005e 9813      		cpse r25,r24
+ 116:ADSR_0_1.c    **** 			flgARold=flgAR;
+ 1192               		.loc 1 116 0
+ 1193 0060 C093 0000 		sts thisADSR+24,r28
+ 1194               	.L50:
+ 117:ADSR_0_1.c    **** 			
+ 1195               		.loc 1 117 0
+ 1196 0064 8093 0000 		sts flgARold,r24
+ 120:ADSR_0_1.c    **** 				flgShape=0;		// expo
+ 1197               		.loc 1 120 0
+ 1198 0068 4E9B      		sbis 0x9,6
+ 1199 006a 00C0      		rjmp .L51
+ 121:ADSR_0_1.c    **** 			else
+ 1200               		.loc 1 121 0
+ 1201 006c 1092 0000 		sts flgShape,__zero_reg__
+ 1202               	.L52:
+ 124:ADSR_0_1.c    **** 			SendToShiftyTypes();
+ 1203               		.loc 1 124 0
+ 1204 0070 0E94 0000 		call process_adsr
+ 1205               	.LVL7:
+ 125:ADSR_0_1.c    **** 		}
+ 1206               		.loc 1 125 0
+ 1207 0074 0E94 0000 		call SendToShiftyTypes
+ 1208               	.LVL8:
+ 1209 0078 00C0      		rjmp .L47
+ 1210               	.L48:
+ 114:ADSR_0_1.c    **** 			if(flgARold!=flgAR)
+ 1211               		.loc 1 114 0
+ 1212 007a C093 0000 		sts flgAR,r28
+ 1213 007e 00C0      		rjmp .L49
+ 1214               	.L51:
+ 123:ADSR_0_1.c    **** 			process_adsr();
+ 1215               		.loc 1 123 0
+ 1216 0080 C093 0000 		sts flgShape,r28
+ 1217 0084 00C0      		rjmp .L52
+ 1218               		.cfi_endproc
+ 1219               	.LFE5:
+ 1221               		.text
+ 1222               	.global	__vector_21
+ 1224               	__vector_21:
+ 1225               	.LFB13:
+ 361:ADSR_0_1.c    **** 
+ 362:ADSR_0_1.c    **** 
+ 363:ADSR_0_1.c    **** //	ADC interrupt
+ 364:ADSR_0_1.c    **** ISR(ADC_vect)
+ 365:ADSR_0_1.c    **** {
+ 1226               		.loc 1 365 0
+ 1227               		.cfi_startproc
+ 1228 07b6 1F92      		push r1
+ 1229               	.LCFI28:
+ 1230               		.cfi_def_cfa_offset 3
+ 1231               		.cfi_offset 1, -2
+ 1232 07b8 0F92      		push r0
+ 1233               	.LCFI29:
+ 1234               		.cfi_def_cfa_offset 4
+ 1235               		.cfi_offset 0, -3
+ 1236 07ba 0FB6      		in r0,__SREG__
+ 1237 07bc 0F92      		push r0
+ 1238 07be 1124      		clr __zero_reg__
+ 1239 07c0 2F93      		push r18
+ 1240               	.LCFI30:
+ 1241               		.cfi_def_cfa_offset 5
+ 1242               		.cfi_offset 18, -4
+ 1243 07c2 3F93      		push r19
+ 1244               	.LCFI31:
+ 1245               		.cfi_def_cfa_offset 6
+ 1246               		.cfi_offset 19, -5
+ 1247 07c4 4F93      		push r20
+ 1248               	.LCFI32:
+ 1249               		.cfi_def_cfa_offset 7
+ 1250               		.cfi_offset 20, -6
+ 1251 07c6 5F93      		push r21
+ 1252               	.LCFI33:
+ 1253               		.cfi_def_cfa_offset 8
+ 1254               		.cfi_offset 21, -7
+ 1255 07c8 6F93      		push r22
+ 1256               	.LCFI34:
+ 1257               		.cfi_def_cfa_offset 9
+ 1258               		.cfi_offset 22, -8
+ 1259 07ca 7F93      		push r23
+ 1260               	.LCFI35:
+ 1261               		.cfi_def_cfa_offset 10
+ 1262               		.cfi_offset 23, -9
+ 1263 07cc 8F93      		push r24
+ 1264               	.LCFI36:
+ 1265               		.cfi_def_cfa_offset 11
+ 1266               		.cfi_offset 24, -10
+ 1267 07ce 9F93      		push r25
+ 1268               	.LCFI37:
+ 1269               		.cfi_def_cfa_offset 12
+ 1270               		.cfi_offset 25, -11
+ 1271 07d0 AF93      		push r26
+ 1272               	.LCFI38:
+ 1273               		.cfi_def_cfa_offset 13
+ 1274               		.cfi_offset 26, -12
+ 1275 07d2 BF93      		push r27
+ 1276               	.LCFI39:
+ 1277               		.cfi_def_cfa_offset 14
+ 1278               		.cfi_offset 27, -13
+ 1279 07d4 EF93      		push r30
+ 1280               	.LCFI40:
+ 1281               		.cfi_def_cfa_offset 15
+ 1282               		.cfi_offset 30, -14
+ 1283 07d6 FF93      		push r31
+ 1284               	.LCFI41:
+ 1285               		.cfi_def_cfa_offset 16
+ 1286               		.cfi_offset 31, -15
+ 1287               	/* prologue: Signal */
+ 1288               	/* frame size = 0 */
+ 1289               	/* stack size = 15 */
+ 1290               	.L__stack_usage = 15
+ 366:ADSR_0_1.c    **** 	//process results
+ 367:ADSR_0_1.c    **** 	switch (thisAdcChannel) {
+ 1291               		.loc 1 367 0
+ 1292 07d8 8091 0000 		lds r24,thisAdcChannel
+ 1293 07dc 8230      		cpi r24,lo8(2)
+ 1294 07de 01F4      		brne .+2
+ 1295 07e0 00C0      		rjmp .L61
+ 1296 07e2 00F4      		brsh .L62
+ 1297 07e4 8823      		tst r24
+ 1298 07e6 01F0      		breq .L63
+ 1299 07e8 8130      		cpi r24,lo8(1)
+ 1300 07ea 01F4      		brne .+2
+ 1301 07ec 00C0      		rjmp .L64
+ 1302               	.L60:
+ 368:ADSR_0_1.c    **** 		case 0:
+ 369:ADSR_0_1.c    **** 		rel_cv = ADC;
+ 370:ADSR_0_1.c    **** 		break;
+ 371:ADSR_0_1.c    **** 		case 1:
+ 372:ADSR_0_1.c    **** 		adsr_cv = ADC;
+ 373:ADSR_0_1.c    **** 		break;
+ 374:ADSR_0_1.c    **** 		case 2:
+ 375:ADSR_0_1.c    **** 		rawAdcPots[1] = ADC;
+ 376:ADSR_0_1.c    **** 		break;
+ 377:ADSR_0_1.c    **** 		case 3:
+ 378:ADSR_0_1.c    **** 		rawAdcPots[0] = ADC;
+ 379:ADSR_0_1.c    **** 		break;
+ 380:ADSR_0_1.c    **** 		case 4:
+ 381:ADSR_0_1.c    **** 		rawAdcPots[3] = ADC;
+ 382:ADSR_0_1.c    **** 		break;
+ 383:ADSR_0_1.c    **** 		case 5:
+ 384:ADSR_0_1.c    **** 		rawAdcPots[2] = ADC;
+ 385:ADSR_0_1.c    **** 		break;
+ 386:ADSR_0_1.c    **** 		
+ 387:ADSR_0_1.c    **** 	}
+ 388:ADSR_0_1.c    **** 	// do the math
+ 389:ADSR_0_1.c    **** 	adcProcess();
+ 1303               		.loc 1 389 0
+ 1304 07ee 0E94 0000 		call adcProcess
+ 1305               	.LVL9:
+ 390:ADSR_0_1.c    **** 	//set up for next channel
+ 391:ADSR_0_1.c    **** 	thisAdcChannel+=1;
+ 1306               		.loc 1 391 0
+ 1307 07f2 8091 0000 		lds r24,thisAdcChannel
+ 1308 07f6 8F5F      		subi r24,lo8(-(1))
+ 392:ADSR_0_1.c    **** 	if(thisAdcChannel >= ADCCHANNELMAX)
+ 1309               		.loc 1 392 0
+ 1310 07f8 8630      		cpi r24,lo8(6)
+ 1311 07fa 00F0      		brlo .+2
+ 1312 07fc 00C0      		rjmp .L68
+ 391:ADSR_0_1.c    **** 	if(thisAdcChannel >= ADCCHANNELMAX)
+ 1313               		.loc 1 391 0
+ 1314 07fe 8093 0000 		sts thisAdcChannel,r24
+ 1315               	.L69:
+ 393:ADSR_0_1.c    **** 	thisAdcChannel=0;
+ 394:ADSR_0_1.c    **** 	ADMUX &= 0xF0;
+ 1316               		.loc 1 394 0
+ 1317 0802 8091 7C00 		lds r24,124
+ 1318 0806 807F      		andi r24,lo8(-16)
+ 1319 0808 8093 7C00 		sts 124,r24
+ 395:ADSR_0_1.c    **** 	ADMUX |= thisAdcChannel;
+ 1320               		.loc 1 395 0
+ 1321 080c 8091 7C00 		lds r24,124
+ 1322 0810 9091 0000 		lds r25,thisAdcChannel
+ 1323 0814 892B      		or r24,r25
+ 1324 0816 8093 7C00 		sts 124,r24
+ 396:ADSR_0_1.c    **** 	ADCSRA |= (1<<ADSC);				//start next conversion
+ 1325               		.loc 1 396 0
+ 1326 081a 8091 7A00 		lds r24,122
+ 1327 081e 8064      		ori r24,lo8(64)
+ 1328 0820 8093 7A00 		sts 122,r24
+ 1329               	/* epilogue start */
+ 397:ADSR_0_1.c    **** }
+ 1330               		.loc 1 397 0
+ 1331 0824 FF91      		pop r31
+ 1332 0826 EF91      		pop r30
+ 1333 0828 BF91      		pop r27
+ 1334 082a AF91      		pop r26
+ 1335 082c 9F91      		pop r25
+ 1336 082e 8F91      		pop r24
+ 1337 0830 7F91      		pop r23
+ 1338 0832 6F91      		pop r22
+ 1339 0834 5F91      		pop r21
+ 1340 0836 4F91      		pop r20
+ 1341 0838 3F91      		pop r19
+ 1342 083a 2F91      		pop r18
+ 1343 083c 0F90      		pop r0
+ 1344 083e 0FBE      		out __SREG__,r0
+ 1345 0840 0F90      		pop r0
+ 1346 0842 1F90      		pop r1
+ 1347 0844 1895      		reti
+ 1348               	.L62:
+ 367:ADSR_0_1.c    **** 		case 0:
+ 1349               		.loc 1 367 0
+ 1350 0846 8430      		cpi r24,lo8(4)
+ 1351 0848 01F0      		breq .L65
+ 1352 084a 00F0      		brlo .L66
+ 1353 084c 8530      		cpi r24,lo8(5)
+ 1354 084e 01F4      		brne .L60
+ 384:ADSR_0_1.c    **** 		break;
+ 1355               		.loc 1 384 0
+ 1356 0850 8091 7800 		lds r24,120
+ 1357 0854 9091 7900 		lds r25,120+1
+ 1358 0858 9093 0000 		sts rawAdcPots+4+1,r25
+ 1359 085c 8093 0000 		sts rawAdcPots+4,r24
+ 385:ADSR_0_1.c    **** 		
+ 1360               		.loc 1 385 0
+ 1361 0860 00C0      		rjmp .L60
+ 1362               	.L63:
+ 369:ADSR_0_1.c    **** 		break;
+ 1363               		.loc 1 369 0
+ 1364 0862 8091 7800 		lds r24,120
+ 1365 0866 9091 7900 		lds r25,120+1
+ 1366 086a 9093 0000 		sts rel_cv+1,r25
+ 1367 086e 8093 0000 		sts rel_cv,r24
+ 370:ADSR_0_1.c    **** 		case 1:
+ 1368               		.loc 1 370 0
+ 1369 0872 00C0      		rjmp .L60
+ 1370               	.L64:
+ 372:ADSR_0_1.c    **** 		break;
+ 1371               		.loc 1 372 0
+ 1372 0874 8091 7800 		lds r24,120
+ 1373 0878 9091 7900 		lds r25,120+1
+ 1374 087c 9093 0000 		sts adsr_cv+1,r25
+ 1375 0880 8093 0000 		sts adsr_cv,r24
+ 373:ADSR_0_1.c    **** 		case 2:
+ 1376               		.loc 1 373 0
+ 1377 0884 00C0      		rjmp .L60
+ 1378               	.L61:
+ 375:ADSR_0_1.c    **** 		break;
+ 1379               		.loc 1 375 0
+ 1380 0886 8091 7800 		lds r24,120
+ 1381 088a 9091 7900 		lds r25,120+1
+ 1382 088e 9093 0000 		sts rawAdcPots+2+1,r25
+ 1383 0892 8093 0000 		sts rawAdcPots+2,r24
+ 376:ADSR_0_1.c    **** 		case 3:
+ 1384               		.loc 1 376 0
+ 1385 0896 00C0      		rjmp .L60
+ 1386               	.L66:
+ 378:ADSR_0_1.c    **** 		break;
+ 1387               		.loc 1 378 0
+ 1388 0898 8091 7800 		lds r24,120
+ 1389 089c 9091 7900 		lds r25,120+1
+ 1390 08a0 9093 0000 		sts rawAdcPots+1,r25
+ 1391 08a4 8093 0000 		sts rawAdcPots,r24
+ 379:ADSR_0_1.c    **** 		case 4:
+ 1392               		.loc 1 379 0
+ 1393 08a8 00C0      		rjmp .L60
+ 1394               	.L65:
+ 381:ADSR_0_1.c    **** 		break;
+ 1395               		.loc 1 381 0
+ 1396 08aa 8091 7800 		lds r24,120
+ 1397 08ae 9091 7900 		lds r25,120+1
+ 1398 08b2 9093 0000 		sts rawAdcPots+6+1,r25
+ 1399 08b6 8093 0000 		sts rawAdcPots+6,r24
+ 382:ADSR_0_1.c    **** 		case 5:
+ 1400               		.loc 1 382 0
+ 1401 08ba 00C0      		rjmp .L60
+ 1402               	.L68:
+ 393:ADSR_0_1.c    **** 	ADMUX &= 0xF0;
+ 1403               		.loc 1 393 0
+ 1404 08bc 1092 0000 		sts thisAdcChannel,__zero_reg__
+ 1405 08c0 00C0      		rjmp .L69
+ 1406               		.cfi_endproc
+ 1407               	.LFE13:
+ 1409               	.global	__vector_14
+ 1411               	__vector_14:
+ 1412               	.LFB14:
+ 398:ADSR_0_1.c    **** 
+ 399:ADSR_0_1.c    **** 
+ 400:ADSR_0_1.c    **** ISR (TIMER0_COMPA_vect)
+ 401:ADSR_0_1.c    **** {
+ 1413               		.loc 1 401 0
+ 1414               		.cfi_startproc
+ 1415 08c2 1F92      		push r1
+ 1416               	.LCFI42:
+ 1417               		.cfi_def_cfa_offset 3
+ 1418               		.cfi_offset 1, -2
+ 1419 08c4 0F92      		push r0
+ 1420               	.LCFI43:
+ 1421               		.cfi_def_cfa_offset 4
+ 1422               		.cfi_offset 0, -3
+ 1423 08c6 0FB6      		in r0,__SREG__
+ 1424 08c8 0F92      		push r0
+ 1425 08ca 1124      		clr __zero_reg__
+ 1426 08cc 8F93      		push r24
+ 1427               	.LCFI44:
+ 1428               		.cfi_def_cfa_offset 5
+ 1429               		.cfi_offset 24, -4
+ 1430               	/* prologue: Signal */
+ 1431               	/* frame size = 0 */
+ 1432               	/* stack size = 4 */
+ 1433               	.L__stack_usage = 4
+ 402:ADSR_0_1.c    **** 	// end of cycle timer
+ 403:ADSR_0_1.c    **** 	// terminates pulse began at end of release
+ 404:ADSR_0_1.c    **** 	// width ~10mS
+ 405:ADSR_0_1.c    **** 	if(flgEOC){
+ 1434               		.loc 1 405 0
+ 1435 08ce 8091 0000 		lds r24,flgEOC
+ 1436 08d2 8823      		tst r24
+ 1437 08d4 01F0      		breq .L72
+ 406:ADSR_0_1.c    **** 		tmrEOC++;
+ 1438               		.loc 1 406 0
+ 1439 08d6 8091 0000 		lds r24,tmrEOC
+ 1440 08da 8F5F      		subi r24,lo8(-(1))
+ 1441 08dc 8093 0000 		sts tmrEOC,r24
+ 407:ADSR_0_1.c    **** 		if(tmrEOC>=EOC_TIMEOUT) {
+ 1442               		.loc 1 407 0
+ 1443 08e0 8091 0000 		lds r24,tmrEOC
+ 1444 08e4 8930      		cpi r24,lo8(9)
+ 1445 08e6 00F0      		brlo .L72
+ 408:ADSR_0_1.c    **** 			EOC_LO;
+ 1446               		.loc 1 408 0
+ 1447 08e8 2998      		cbi 0x5,1
+ 409:ADSR_0_1.c    **** 			flgEOC=0;
+ 1448               		.loc 1 409 0
+ 1449 08ea 1092 0000 		sts flgEOC,__zero_reg__
+ 1450               	.L72:
+ 410:ADSR_0_1.c    **** 		}
+ 411:ADSR_0_1.c    **** 	}
+ 412:ADSR_0_1.c    **** 
+ 413:ADSR_0_1.c    **** 	flgProcess=1;
+ 1451               		.loc 1 413 0
+ 1452 08ee 81E0      		ldi r24,lo8(1)
+ 1453 08f0 8093 0000 		sts flgProcess,r24
+ 1454               	/* epilogue start */
+ 414:ADSR_0_1.c    **** }
+ 1455               		.loc 1 414 0
+ 1456 08f4 8F91      		pop r24
+ 1457 08f6 0F90      		pop r0
+ 1458 08f8 0FBE      		out __SREG__,r0
+ 1459 08fa 0F90      		pop r0
+ 1460 08fc 1F90      		pop r1
+ 1461 08fe 1895      		reti
+ 1462               		.cfi_endproc
+ 1463               	.LFE14:
+ 1465               	.global	__vector_5
+ 1467               	__vector_5:
+ 1468               	.LFB15:
+ 415:ADSR_0_1.c    **** 
+ 416:ADSR_0_1.c    **** 
+ 417:ADSR_0_1.c    **** ISR(PCINT2_vect)
+ 418:ADSR_0_1.c    **** {
+ 1469               		.loc 1 418 0
+ 1470               		.cfi_startproc
+ 1471 0900 1F92      		push r1
+ 1472               	.LCFI45:
+ 1473               		.cfi_def_cfa_offset 3
+ 1474               		.cfi_offset 1, -2
+ 1475 0902 0F92      		push r0
+ 1476               	.LCFI46:
+ 1477               		.cfi_def_cfa_offset 4
+ 1478               		.cfi_offset 0, -3
+ 1479 0904 0FB6      		in r0,__SREG__
+ 1480 0906 0F92      		push r0
+ 1481 0908 1124      		clr __zero_reg__
+ 1482 090a 8F93      		push r24
+ 1483               	.LCFI47:
+ 1484               		.cfi_def_cfa_offset 5
+ 1485               		.cfi_offset 24, -4
+ 1486 090c 9F93      		push r25
+ 1487               	.LCFI48:
+ 1488               		.cfi_def_cfa_offset 6
+ 1489               		.cfi_offset 25, -5
+ 1490               	/* prologue: Signal */
+ 1491               	/* frame size = 0 */
+ 1492               	/* stack size = 5 */
+ 1493               	.L__stack_usage = 5
+ 419:ADSR_0_1.c    **** 	static uint8_t	pinDmem=0x02;
+ 420:ADSR_0_1.c    **** 	uint8_t	pinDstate;
+ 421:ADSR_0_1.c    **** 	
+ 422:ADSR_0_1.c    **** 	// processes Gate interrupt
+ 423:ADSR_0_1.c    **** 	// uses pinDmem to remember old state to check for change
+ 424:ADSR_0_1.c    **** 	// and to detect falling edge (Gate is inverted in hardware)
+ 425:ADSR_0_1.c    **** 	
+ 426:ADSR_0_1.c    **** 	pinDstate=PIND;					//get the state of PIND once	
+ 1494               		.loc 1 426 0
+ 1495 090e 89B1      		in r24,0x9
+ 1496               	.LVL10:
+ 427:ADSR_0_1.c    **** 	if((pinDstate&0x10)!=(pinDmem&0x10)) {		//did it change?
+ 1497               		.loc 1 427 0
+ 1498 0910 9091 0000 		lds r25,pinDmem.2089
+ 1499 0914 9827      		eor r25,r24
+ 1500 0916 94FF      		sbrs r25,4
+ 1501 0918 00C0      		rjmp .L75
+ 428:ADSR_0_1.c    **** 		if((pinDstate&0x10)==0x00)	{			//is it our edge?
+ 1502               		.loc 1 428 0
+ 1503 091a 84FD      		sbrc r24,4
+ 1504 091c 00C0      		rjmp .L75
+ 429:ADSR_0_1.c    **** 			flgGate=1;
+ 1505               		.loc 1 429 0
+ 1506 091e 91E0      		ldi r25,lo8(1)
+ 1507 0920 9093 0000 		sts flgGate,r25
+ 1508               	.L75:
+ 430:ADSR_0_1.c    **** 		}
+ 431:ADSR_0_1.c    **** 	}
+ 432:ADSR_0_1.c    **** 	
+ 433:ADSR_0_1.c    **** 	pinDmem=pinDstate;					//remember this port sample
+ 1509               		.loc 1 433 0
+ 1510 0924 8093 0000 		sts pinDmem.2089,r24
+ 1511               	/* epilogue start */
+ 434:ADSR_0_1.c    **** }
+ 1512               		.loc 1 434 0
+ 1513 0928 9F91      		pop r25
+ 1514 092a 8F91      		pop r24
+ 1515               	.LVL11:
+ 1516 092c 0F90      		pop r0
+ 1517 092e 0FBE      		out __SREG__,r0
+ 1518               	.LVL12:
+ 1519 0930 0F90      		pop r0
+ 1520 0932 1F90      		pop r1
+ 1521 0934 1895      		reti
+ 1522               		.cfi_endproc
+ 1523               	.LFE15:
+ 1525               		.data
+ 1528               	pinDmem.2089:
+ 1529 0000 02        		.byte	2
+ 1530               		.local	NextExpoAmt.2039
+ 1531               		.comm	NextExpoAmt.2039,4,1
+ 1532               		.comm	tmrEOC,1,1
+ 1533               		.comm	flgEOC,1,1
+ 1534               		.comm	flgProcess,1,1
+ 1535               		.comm	thisAdcChannel,1,1
+ 1536               		.comm	flgGate,1,1
+ 1537               		.comm	flgARold,1,1
+ 1538               		.comm	flgAR,1,1
+ 1539               		.comm	flgShape,1,1
+ 1540               		.comm	adsr_cv,2,1
+ 1541               		.comm	rel_cv,2,1
+ 1542               		.comm	rawAdcSum,8,1
+ 1543               		.comm	rawAdcPots,8,1
+ 1544               		.comm	thisADSR,25,1
+ 1545               		.text
+ 1546               	.Letext0:
+ 1547               		.file 2 "/Applications/Arduino.app/Contents/Java/hardware/tools/avr/avr/include/stdint.h"
+ 1548               		.file 3 "/Applications/Arduino.app/Contents/Java/hardware/tools/avr/lib/gcc/avr/7.3.0/include/stdd
+ 1549               		.file 4 "/Applications/Arduino.app/Contents/Java/hardware/tools/avr/avr/include/stdio.h"
+ 1550               		.file 5 "/Applications/Arduino.app/Contents/Java/hardware/tools/avr/avr/include/stdlib.h"
+DEFINED SYMBOLS
+                            *ABS*:0000000000000000 ADSR_0_1.c
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:2      *ABS*:000000000000003e __SP_H__
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:3      *ABS*:000000000000003d __SP_L__
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:4      *ABS*:000000000000003f __SREG__
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:5      *ABS*:0000000000000000 __tmp_reg__
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:6      *ABS*:0000000000000001 __zero_reg__
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:12     .text:0000000000000000 init_ports
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:40     .text:0000000000000010 process_adsr
+                            *COM*:0000000000000019 thisADSR
+                            *COM*:0000000000000001 flgShape
+                            *COM*:0000000000000001 tmrEOC
+                            *COM*:0000000000000001 flgEOC
+                            *COM*:0000000000000001 flgAR
+                            *COM*:0000000000000008 rawAdcSum
+                             .bss:0000000000000000 NextExpoAmt.2039
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:796    .text:0000000000000636 init_devices
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:827    .text:0000000000000654 pgm_init
+                            *COM*:0000000000000001 thisAdcChannel
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:856    .text:000000000000066a adcProcess
+                            *COM*:0000000000000008 rawAdcPots
+                            *COM*:0000000000000002 adsr_cv
+                            *COM*:0000000000000002 rel_cv
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1023   .text:0000000000000766 SendToShiftyTypes
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1091   .text:00000000000007a4 timer_init
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1119   .text.startup:0000000000000000 main
+                            *COM*:0000000000000001 flgGate
+                            *COM*:0000000000000001 flgProcess
+                            *COM*:0000000000000001 flgARold
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1224   .text:00000000000007b6 __vector_21
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1411   .text:00000000000008c2 __vector_14
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1467   .text:0000000000000900 __vector_5
+/var/folders/r4/1pk6klb974nbm1yyfb57p2k00000gn/T//ccR6WpaP.s:1528   .data:0000000000000000 pinDmem.2089
+
+UNDEFINED SYMBOLS
+__udivmodsi4
+__muluhisi3
+__subdi3
+__cmpdi2
+__divmodsi4
+__do_copy_data
+__do_clear_bss
