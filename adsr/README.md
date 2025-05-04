@@ -1,6 +1,8 @@
 Changes
 
 - Makefile
+  - F_CPU 20 Mhz?
+  - atmega88 to atmega168
 
 - note fuse settings for m168p and m328p
   - calculated using http://www.engbedded.com/fusecalc/
