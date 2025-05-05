@@ -1,9 +1,9 @@
 #include "pwm.h"
 
 const int clock = 2;
+const int duration = A1;
 const int gate = 13;
 const int cv = 9;
-const int duration = A1;
 
 unsigned clockstate = 0;
 
