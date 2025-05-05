@@ -4,6 +4,9 @@ void pwm_init()
 {
     // Set up Timer 1 to do PWM for the CV 1v/oct output.
 
+    // OC1A = pin 9
+    // OC1B = pin 10
+
     // Fast PWM mode.
     //
     // COM = 0b01 Clear OC1A/OC1B on Compare Match, set OC1A/OC1B at BOTTOM

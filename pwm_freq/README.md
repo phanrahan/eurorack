@@ -15,17 +15,7 @@ janostman
 
 The default frequency of the PWM signal on timer1 is 490 Hz.
 
-The PWM frequency in scale.ino is much faster!
-
-RC filter after PWM
-R = 1 K
-C = 1 uF
-f = 15.923566879 Hz
-
-
-nano on osx
-  * reinstalled prolific 2303 driver
-  * needed to select OLD bootloader
+This PWM frequency is much faster!
 
 * check signal on oscilloscope
   * measures 520 Hz

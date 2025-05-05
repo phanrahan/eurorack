@@ -49,9 +49,9 @@ MCU = atmega168
 #     calculate timings. Do NOT tack on a 'UL' at the end, this will be done
 #     automatically to create a 32-bit value in your source code.
 # F_CPU = 1200000
-F_CPU = 20000000
 # F_CPU = 8000000
 # F_CPU = 16000000
+F_CPU = 20000000
 
 
 # Output format. (can be srec, ihex, binary)
