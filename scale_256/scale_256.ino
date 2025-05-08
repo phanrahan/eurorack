@@ -1,6 +1,6 @@
 #include "pwm.h"
 
-const int duration = A1;
+const int duration = A0;
 const int gate = 13;
 const int cv = 9;
 
@@ -27,10 +27,10 @@ void loop()
 {
     unsigned d = analogRead(duration);
 
-    pwm_write(voltage * 40);
+    pwm_write(voltage * 4);
     voltage = (voltage +1) % 24;
     
     pulse(d);
 
-    delay(1000);
+    delay(200);
 }

@@ -14,8 +14,11 @@ void pwm_init()
     TCCR1A = (1 << COM1A1)  | (1 << WGM11);
 
     // CS = 0b001 clk
+    // 16000000/3840 = 520 Hz
+    TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS10);
     // CS = 0b010 clk/8
-    TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS11);
+    // 16000000/3840 = 4155 Hz
+    //TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS11);
 
     OCR1A = 0;
     TIMSK1 = 0;
@@ -28,7 +31,6 @@ void pwm_init()
     ICR1H = 15;
     ICR1L = 0;
 
-    // 16000000/8/3840 = 520 Hz
 }
 
 // pwm = 64 * note where 0 <= note <= 60

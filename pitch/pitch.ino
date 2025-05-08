@@ -9,6 +9,8 @@ void setup()
 
 void loop() 
 {
+    //
+    // analogWrite(cvPin, analogRead(potPin) / 4); 
     // 1 Octave
     analogWrite(cvPin, analogRead(potPin) / 20); 
 
