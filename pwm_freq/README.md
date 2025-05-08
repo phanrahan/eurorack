@@ -17,8 +17,6 @@ The default frequency of the PWM signal on timer1 is 490 Hz.
 
 This PWM frequency is much faster!
 
-* check signal on oscilloscope
-  * measures 520 Hz
-  * switch to div1
-  * meaures 4167
-  - tail after the signal goes to 0 ...
+observe pwm signal on oscilloscope
+- 16000000/8/3850 = 5-0 Hz
+- 16000000/1/3850 = 4156 Hz
