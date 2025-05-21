@@ -16,7 +16,7 @@ USBHost myusb;
 MIDIDevice midi1(myusb);
 
 void setup() {
-  analogWriteResolution(8);
+  analogWriteResolution(12);
   analogReadResolution(3);
   pinMode(in_2, INPUT);
   pinMode(gate_1, OUTPUT);
@@ -75,7 +75,7 @@ void myNoteOn(byte channel, byte note, byte velocity) {
       Serial.print(" ");
       Serial.println(velocity); 
       note = note - 36; 
-      int value = note * 255.0/(12*3.3); // map octave to 0 .. 1 V output
+      int value = note * 1023.0/(12*3.3); // map octave to 0 .. 1 V output
       analogWrite(cv_out_1, value);
       analogWrite(cv_out_2, value);
       digitalWriteFast(gate_1, HIGH);
