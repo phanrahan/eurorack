@@ -232,6 +232,8 @@ AVRDUDE_FLAGS = -p $(MCU) -P $(AVRDUDE_PORT) -c $(AVRDUDE_PROGRAMMER)
 AVRDUDE_FLAGS += $(AVRDUDE_NO_VERIFY) -F
 AVRDUDE_FLAGS += $(AVRDUDE_VERBOSE)
 AVRDUDE_FLAGS += $(AVRDUDE_ERASE_COUNTER)
+#AVRDUDE_FLAGS += -C /Users/hanrahan/Library/Arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/etc/avrdude.conf
+AVRDUDE_FLAGS += -C /opt/homebrew/etc/avrdude.conf
 
 
 
@@ -274,7 +276,8 @@ OBJCOPY = avr-objcopy
 OBJDUMP = avr-objdump
 SIZE = avr-size
 NM = avr-nm
-AVRDUDE = /usr/local/CrossPack-AVR/bin/avrdude
+#AVRDUDE = /usr/local/CrossPack-AVR/bin/avrdude
+AVRDUDE = avrdude
 REMOVE = rm -f
 COPY = cp
 WINSHELL = cmd
@@ -384,6 +387,7 @@ program: $(TARGET).hex $(TARGET).eep
 # -U efuse:w:0xf9:m  - BOOTSZ0, BOOTSZ1
 # for m88 and m168p from synthrotek ADSR wiki
 FUSE = -U lfuse:w:0xff:m -U hfuse:w:0xdc:m  -U efuse:w:0xf9:m  
+#FUSE = -U lfuse:w:0xff:m -U hfuse:w:0xdc:m  -U efuse:w:0x01:m  
 # for m328 
 #FUSE = -U lfuse:w:0xff:m -U hfuse:w:0xd9:m  -U efuse:w:0xfc:m  
 erase:
