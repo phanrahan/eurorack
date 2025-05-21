@@ -21,14 +21,21 @@ void setup() {
   pinMode(in_2, INPUT);
   pinMode(gate_1, OUTPUT);
   pinMode(gate_2, OUTPUT);
+  pinMode(cv_out_1, OUTPUT);
+  pinMode(cv_out_2, OUTPUT);
   pinMode(LED, OUTPUT);
+
+  analogWrite(cv_out_1, 0);
+  analogWrite(cv_out_2, 0);
   digitalWriteFast(LED, HIGH);
+
   Serial.begin(57600);
   delay(1500);
   myusb.begin();
   //midi1.setHandleControlChange(myControlChange);
   midi1.setHandleNoteOn(myNoteOn);
   midi1.setHandleNoteOff(myNoteOff);
+  Serial.println("MIDI Usb ");
 }
 
 void loop() {
@@ -36,7 +43,7 @@ void loop() {
   midi1.read();
 
   /*
-  current_reading = analogRead(A1);
+  current_reading = analogRead(in_1);
 
   data = digitalReadFast(in_2);
 
@@ -69,13 +76,17 @@ void myControlChange(byte channel, byte control, byte value) {
 */
 
 void myNoteOn(byte channel, byte note, byte velocity) {
-  if (channel == 10) {
-    if (note >= 36 && note <= 43) {
+  if (channel == 1) {
+    if (note >= 36 && note <= 51) {
+      Serial.print("Note on ");
+      Serial.print(channel); 
+      Serial.print(" ");
       Serial.print(note); 
       Serial.print(" ");
       Serial.println(velocity); 
       note = note - 36; 
-      int value = note * 1023.0/(12*3.3); // map octave to 0 .. 1 V output
+      int value = note * 4095.0/(12*3.3); // map octave to 0 .. 1 V output
+      //Serial.println(value); 
       analogWrite(cv_out_1, value);
       analogWrite(cv_out_2, value);
       digitalWriteFast(gate_1, HIGH);
@@ -86,8 +97,11 @@ void myNoteOn(byte channel, byte note, byte velocity) {
 }
 
 void myNoteOff(byte channel, byte note, byte velocity) {
-  if (channel == 10) {
-    if (note >= 36 && note <= 43) {
+  if (channel == 1) {
+    if (note >= 36 && note <= 51) {
+      Serial.print("Note off ");
+      Serial.print(channel); 
+      Serial.print(" ");
       Serial.print(note); 
       Serial.print(" ");
       Serial.println(velocity); 
